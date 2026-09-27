@@ -338,13 +338,20 @@ export interface ExperimentalFeatures {
   automaticProfileInstallation: boolean;
   unsupportedVersionOverride: boolean;
   advancedProfileSelection: boolean;
+  /**
+   * Automated Calibration Pipeline (managed/installed Orca slicing engine).
+   * DEFAULTS TO FALSE and stays off until the multi-stage feature lands — no
+   * automated session, engine, or slicing behavior may run while this is false.
+   */
+  automatedCalibration: boolean;
 }
 
 export const DEFAULT_EXPERIMENTAL_FEATURES: ExperimentalFeatures = {
   slicerProfileGeneration: true,
   automaticProfileInstallation: true, // still gated per-version by the registry
   unsupportedVersionOverride: false,
-  advancedProfileSelection: true
+  advancedProfileSelection: true,
+  automatedCalibration: false // Stage 1: disabled; automated pipeline not yet implemented
 };
 
 // --- compatibility registry ------------------------------------------------

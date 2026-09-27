@@ -4,6 +4,8 @@ import type {
 } from '../types';
 import { DEFAULT_ORDER } from '../data/calibrations';
 import { idb } from './db';
+import { ApiError, backendReady, getStoredServerUrl, http, isBackendReadySync, isDesktopRuntime } from './serverBridge';
+import { deriveConnectionState, setConnectionState } from './connectionState';
 
 /**
  * v1: original release.
@@ -15,8 +17,13 @@ import { idb } from './db';
  *     Diameters, buildVolume, maxPrintSpeed/Acceleration, firmware, extruder-
  *     Count, multiMaterialCompatibility, releaseYear, databasePrinterId,
  *     isManual). Purely additive — existing printers load unchanged.
+ * v5: adds optional automated-calibration session fields to CalibrationProject
+ *     (slicerMode, sessionStatus, workingProfile, generatedJobs, sessionWarnings,
+ *     selectedEngineId, automatedSchemaVersion). Purely additive and gated behind
+ *     the disabled `automatedCalibration` flag — existing projects load unchanged
+ *     and IndexedDB persists the new optional fields with no store changes.
  */
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 // --- ids -------------------------------------------------------------------
 
@@ -49,6 +56,46 @@ export function loadSettings(): AppSettings {
 
 export function saveSettings(s: AppSettings): void {
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
+  // Best-effort background sync — this function stays synchronous (6 call
+  // sites depend on that), so a backend probe can't be awaited here. Only
+  // fire if a backend was already confirmed present by an earlier
+  // backendReady() resolution (see hydrateSettingsFromServer in main.ts).
+  if (isBackendReadySync()) {
+    void http.putSettings(s).catch((err) => console.warn('Failed to sync settings to server', err));
+  }
+}
+
+/**
+ * Pulls settings from the backend (if any) into localStorage before the app's
+ * first synchronous loadSettings() call. Must be awaited once, early, at
+ * startup (see main.ts) — a no-op when no backend is reachable. Also this is
+ * where connectionState.ts's three-state detection is resolved: a 401 here
+ * means a token is required and missing/wrong ('needs-token'), any other
+ * outcome after a successful health check means 'connected' — the server IS
+ * reachable, so an unrelated fetch hiccup shouldn't be reported as an auth
+ * problem. Also re-run (from Settings) after the user saves a new token, to
+ * re-check the connection without a full page reload.
+ */
+export async function hydrateSettingsFromServer(): Promise<void> {
+  const isDesktop = isDesktopRuntime();
+  const hasServerUrl = getStoredServerUrl() !== null;
+
+  const ready = await backendReady();
+  if (!ready) {
+    setConnectionState(deriveConnectionState({ healthOk: false, authFailed: false, isDesktop, hasServerUrl }));
+    return;
+  }
+  let authFailed = false;
+  try {
+    const serverSettings = await http.getSettings();
+    if (serverSettings) {
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify({ ...loadSettings(), ...serverSettings }));
+    }
+  } catch (err) {
+    authFailed = err instanceof ApiError && err.status === 401;
+    if (!authFailed) console.warn('Failed to hydrate settings from server', err);
+  }
+  setConnectionState(deriveConnectionState({ healthOk: true, authFailed, isDesktop, hasServerUrl }));
 }
 
 /** Auto-save of in-progress form data, keyed by project+step. */
@@ -76,23 +123,46 @@ export function clearDraft(key: string): void {
 }
 
 // --- printers --------------------------------------------------------------
+// Each exported function dispatches to the HTTP backend when one is present
+// (detected once via backendReady()), otherwise falls back to IndexedDB. No
+// call site elsewhere in the app needs to know which store is in play.
 
-export async function listPrinters(): Promise<PrinterProfile[]> {
+async function idbListPrinters(): Promise<PrinterProfile[]> {
   const all = await idb.getAll<PrinterProfile>('printers');
   return all.sort((a, b) => a.name.localeCompare(b.name));
 }
 
-export async function getPrinter(id: string): Promise<PrinterProfile | undefined> {
+async function idbGetPrinter(id: string): Promise<PrinterProfile | undefined> {
   return idb.get<PrinterProfile>('printers', id);
+}
+
+async function idbSavePrinter(p: PrinterProfile): Promise<void> {
+  await idb.put('printers', p);
+}
+
+async function idbDeletePrinter(id: string): Promise<void> {
+  await idb.delete('printers', id);
+}
+
+export async function listPrinters(): Promise<PrinterProfile[]> {
+  if (await backendReady()) return http.listPrinters();
+  return idbListPrinters();
+}
+
+export async function getPrinter(id: string): Promise<PrinterProfile | undefined> {
+  if (await backendReady()) return http.getPrinter(id);
+  return idbGetPrinter(id);
 }
 
 export async function savePrinter(p: PrinterProfile): Promise<void> {
   p.updatedAt = new Date().toISOString();
-  await idb.put('printers', p);
+  if (await backendReady()) return http.savePrinter(p);
+  return idbSavePrinter(p);
 }
 
 export async function deletePrinter(id: string): Promise<void> {
-  await idb.delete('printers', id);
+  if (await backendReady()) return http.deletePrinter(id);
+  return idbDeletePrinter(id);
 }
 
 // --- projects --------------------------------------------------------------
@@ -130,25 +200,46 @@ export function ensureProjectSteps(p: CalibrationProject): CalibrationProject {
   return p;
 }
 
+async function idbListProjects(): Promise<CalibrationProject[]> {
+  return idb.getAll<CalibrationProject>('projects');
+}
+
+async function idbGetProject(id: string): Promise<CalibrationProject | undefined> {
+  return idb.get<CalibrationProject>('projects', id);
+}
+
+async function idbSaveProject(p: CalibrationProject): Promise<void> {
+  await idb.put('projects', p);
+}
+
+async function idbDeleteProject(id: string): Promise<void> {
+  await idb.delete('projects', id);
+  const photos = await idb.getAllByIndex<StoredPhoto>('photos', 'byProject', id);
+  for (const ph of photos) await idb.delete('photos', ph.id);
+}
+
 export async function listProjects(): Promise<CalibrationProject[]> {
-  const all = await idb.getAll<CalibrationProject>('projects');
+  const all = (await backendReady()) ? await http.listProjects() : await idbListProjects();
   return all.map(ensureProjectSteps).sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''));
 }
 
 export async function getProject(id: string): Promise<CalibrationProject | undefined> {
-  const p = await idb.get<CalibrationProject>('projects', id);
+  const p = (await backendReady()) ? await http.getProject(id) : await idbGetProject(id);
   return p ? ensureProjectSteps(p) : undefined;
 }
 
 export async function saveProject(p: CalibrationProject): Promise<void> {
   p.updatedAt = new Date().toISOString();
-  await idb.put('projects', p);
+  if (await backendReady()) return http.saveProject(p);
+  return idbSaveProject(p);
 }
 
 export async function deleteProject(id: string): Promise<void> {
-  await idb.delete('projects', id);
-  const photos = await idb.getAllByIndex<StoredPhoto>('photos', 'byProject', id);
-  for (const ph of photos) await idb.delete('photos', ph.id);
+  // The server cascade-deletes a project's photos itself (server/db.ts
+  // deleteProjectCascade); the IndexedDB path has no such foreign key, so it
+  // does the cascade manually.
+  if (await backendReady()) return http.deleteProject(id);
+  return idbDeleteProject(id);
 }
 
 export function addTimeline(p: CalibrationProject, entry: Omit<TimelineEntry, 'id' | 'at'>): void {
@@ -171,16 +262,41 @@ export function currentStage(p: CalibrationProject): CalibrationId | null {
 
 // --- photos ----------------------------------------------------------------
 
-export async function savePhoto(photo: StoredPhoto): Promise<void> {
+async function idbSavePhoto(photo: StoredPhoto): Promise<void> {
   await idb.put('photos', photo);
 }
 
-export async function getPhotosForProject(projectId: string): Promise<StoredPhoto[]> {
+async function idbGetPhotosForProject(projectId: string): Promise<StoredPhoto[]> {
   return idb.getAllByIndex<StoredPhoto>('photos', 'byProject', projectId);
 }
 
-export async function deletePhoto(id: string): Promise<void> {
+async function idbListAllPhotos(): Promise<StoredPhoto[]> {
+  return idb.getAll<StoredPhoto>('photos');
+}
+
+async function idbDeletePhoto(id: string): Promise<void> {
   await idb.delete('photos', id);
+}
+
+export async function savePhoto(photo: StoredPhoto): Promise<void> {
+  if (await backendReady()) return http.savePhoto(photo);
+  return idbSavePhoto(photo);
+}
+
+export async function getPhotosForProject(projectId: string): Promise<StoredPhoto[]> {
+  if (await backendReady()) return http.getPhotosForProject(projectId);
+  return idbGetPhotosForProject(projectId);
+}
+
+/** Every photo across every project — used by exportAll's full-backup path. */
+export async function listAllPhotos(): Promise<StoredPhoto[]> {
+  if (await backendReady()) return http.listAllPhotos();
+  return idbListAllPhotos();
+}
+
+export async function deletePhoto(id: string): Promise<void> {
+  if (await backendReady()) return http.deletePhoto(id);
+  return idbDeletePhoto(id);
 }
 
 // --- factory ---------------------------------------------------------------

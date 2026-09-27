@@ -1,6 +1,5 @@
-import type { BackupFile, CalibrationProject, PrinterProfile, StoredPhoto } from '../types';
-import { SCHEMA_VERSION, ensureProjectSteps, listPrinters, listProjects, loadSettings, saveProject, savePrinter, uid } from '../storage/store';
-import { idb } from '../storage/db';
+import type { BackupFile, CalibrationProject, PrinterProfile } from '../types';
+import { SCHEMA_VERSION, ensureProjectSteps, listAllPhotos, listPrinters, listProjects, loadSettings, saveProject, savePhoto, savePrinter, uid } from '../storage/store';
 
 /** Serialize one project (with its printer profile embedded) for sharing. */
 export async function exportProject(p: CalibrationProject, printer?: PrinterProfile): Promise<string> {
@@ -24,7 +23,7 @@ export async function exportAll(includePhotos: boolean): Promise<string> {
     settings: loadSettings()
   };
   if (includePhotos) {
-    const photos = await idb.getAll<StoredPhoto>('photos');
+    const photos = await listAllPhotos();
     file.photos = await Promise.all(photos.map(async ph => ({
       meta: { id: ph.id, projectId: ph.projectId, stepId: ph.stepId, attemptId: ph.attemptId, createdAt: ph.createdAt, name: ph.name, type: ph.type },
       dataUrl: await blobToDataUrl(ph.blob)
@@ -98,7 +97,7 @@ export async function importBackup(json: string): Promise<ImportResult> {
     try {
       const blob = dataUrlToBlob(ph.dataUrl);
       const projectId = projectIdMap.get(ph.meta.projectId) ?? ph.meta.projectId;
-      await idb.put('photos', { ...ph.meta, id: uid(), projectId, blob });
+      await savePhoto({ ...ph.meta, id: uid(), projectId, blob });
       photosImported++;
     } catch { /* skip broken photo entries */ }
   }
@@ -110,7 +109,7 @@ export async function importBackup(json: string): Promise<ImportResult> {
   };
 }
 
-/** Migrate older schema versions forward. v4 is current. */
+/** Migrate older schema versions forward. v5 is current. */
 export function migrate(file: BackupFile): BackupFile {
   const v = file.schemaVersion ?? 1;
   let out = file;
@@ -134,16 +133,28 @@ export function migrate(file: BackupFile): BackupFile {
     }
     out = { ...out, schemaVersion: 4 };
   }
+  if ((out.schemaVersion ?? 1) < 5) {
+    // v4 → v5: CalibrationProject gained optional automated-calibration session
+    // fields. Additive — projects without them are already valid (no automated
+    // session). The defensive normalization below tidies the arrays when the
+    // fields are present. Nothing to transform otherwise.
+    out = { ...out, schemaVersion: 5 };
+  }
   // Defensive normalization regardless of version:
   for (const p of out.projects ?? []) {
     p.timeline = Array.isArray(p.timeline) ? p.timeline : [];
     p.finals = p.finals ?? {};
     p.archived = !!p.archived;
     p.generatedProfiles = Array.isArray(p.generatedProfiles) ? p.generatedProfiles : [];
-    p.stepOrder = Array.isArray(p.stepOrder) && p.stepOrder.length ? p.stepOrder : p.stepOrder;
     for (const key of Object.keys(p.steps ?? {})) {
       const st = (p.steps as Record<string, { history?: unknown[] }>)[key];
       if (st && !Array.isArray(st.history)) st.history = [];
+    }
+    // Automated session fields: only normalize when a session is present, so we
+    // never fabricate a session on a plain manual project.
+    if (p.sessionStatus !== undefined || p.workingProfile !== undefined) {
+      p.generatedJobs = Array.isArray(p.generatedJobs) ? p.generatedJobs : [];
+      p.sessionWarnings = Array.isArray(p.sessionWarnings) ? p.sessionWarnings : [];
     }
     ensureProjectSteps(p);
   }

@@ -1,0 +1,121 @@
+name: Integration (real Orca)
+
+# Opt-in only. This lane fetches the pinned OrcaSlicer build and runs the
+# supervised `#[ignore]`d probes — the real-Orca slice/resolve/detection tests
+# that the fast unit lane deliberately skips (GitHub's default runners, and
+# every Orca-less dev machine, have no OrcaSlicer). It is NEVER on push or PR:
+# it downloads ~171 MB and drives real headless slices, so it runs only when a
+# maintainer triggers it (Actions → this workflow → Run workflow).
+#
+# The probes are env-driven (see slicer_integration::test_support): they read
+# the install root from PERFECTFIT_ORCA_ROOT and the pinned zip from
+# PERFECTFIT_ORCA_ZIP. This job sets both after fetching the SAME pinned build
+# (url + sha256 + size) that the app's download-on-demand path uses.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: integration-orca
+  cancel-in-progress: true
+
+jobs:
+  real-orca:
+    runs-on: windows-latest
+    env:
+      # Must match PINNED_MANAGED_ORCA in src-tauri/src/slicer_integration/engine.rs.
+      ORCA_VERSION: "2.4.2"
+      ORCA_URL: "https://github.com/OrcaSlicer/OrcaSlicer/releases/download/v2.4.2/OrcaSlicer_Windows_V2.4.2_x64_portable.zip"
+      ORCA_SHA256: "feba3009dfb9d268779cca5758a1a5bc3b7d0722bf8fa48d5c57340de975d6be"
+      ORCA_SIZE: "171367668"
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build artifacts
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      # Cache the fetched + extracted Orca across runs, keyed on the pinned
+      # checksum, so re-runs skip the 171 MB download.
+      - name: Cache pinned OrcaSlicer
+        id: orca-cache
+        uses: actions/cache@v4
+        with:
+          path: orca-engine
+          key: orca-${{ env.ORCA_VERSION }}-${{ env.ORCA_SHA256 }}
+
+      - name: Fetch and verify pinned OrcaSlicer
+        if: steps.orca-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path orca-engine | Out-Null
+          $zip = Join-Path (Resolve-Path orca-engine) "orca.zip"
+          Write-Host "Downloading $env:ORCA_URL"
+          Invoke-WebRequest -Uri $env:ORCA_URL -OutFile $zip
+
+          # Integrity: same guarantee the app's download path enforces. Refuse
+          # to proceed on any mismatch (a moved/replaced asset must not slip in).
+          $size = (Get-Item $zip).Length
+          if ($size -ne [int64]$env:ORCA_SIZE) {
+            throw "Size mismatch: got $size, expected $env:ORCA_SIZE"
+          }
+          $hash = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLower()
+          if ($hash -ne $env:ORCA_SHA256) {
+            throw "Checksum mismatch: got $hash, expected $env:ORCA_SHA256"
+          }
+          Write-Host "Checksum + size verified."
+
+          # The Windows portable zip extracts FLAT (orca-slicer.exe + resources/
+          # at the top level), so <root> = orca-engine/orca has the exe and its
+          # resources/ side by side — exactly what the structural validation and
+          # test_support::orca_exe() expect.
+          Expand-Archive -Path $zip -DestinationPath (Join-Path (Resolve-Path orca-engine) "orca") -Force
+          if (-not (Test-Path (Join-Path (Resolve-Path orca-engine) "orca/orca-slicer.exe"))) {
+            throw "orca-slicer.exe not found after extraction"
+          }
+
+      - name: Point the probes at the fetched Orca
+        shell: pwsh
+        run: |
+          $root = Join-Path (Resolve-Path orca-engine) "orca"
+          $zip  = Join-Path (Resolve-Path orca-engine) "orca.zip"
+          "PERFECTFIT_ORCA_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          # The cache stores the whole orca-engine dir, so orca.zip is present on
+          # every run (hit or miss) — set the zip-probe var when it's there so
+          # probe_stage_real_orca_zip exercises staging on the real asset. Guarded
+          # with Test-Path so a future "extract-then-delete-zip" tweak degrades to
+          # a clean skip rather than a failure.
+          if (Test-Path $zip) {
+            "PERFECTFIT_ORCA_ZIP=$zip" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          }
+
+      - name: Unit lane (sanity)
+        working-directory: ./src-tauri
+        run: cargo test --lib
+
+      # Run the seven Orca-*resource* probes — the ones a portable Orca download
+      # satisfies (they slice/resolve against PERFECTFIT_ORCA_ROOT/resources and
+      # run the exe). The module-path filters below are OR'd and select exactly
+      # those seven.
+      #
+      # Deliberately NOT run here: the installer's discovery probes
+      # (discovery::manual_probe::probe_real_*) and manual install/restore probes
+      # (install::tests::manual_*) need a slicer INSTALLED in %APPDATA% / Program
+      # Files (plus MANUAL_* paths), which a portable download does not provide —
+      # a different concern from automated-calibration slicing, out of scope here.
+      - name: Real-Orca probes
+        working-directory: ./src-tauri
+        run: >-
+          cargo test --lib -- --ignored --nocapture
+          engine::tests::probe_stage_real_orca_zip
+          flow_test::
+          model_project::
+          preset_resolver::
+          project_assembly::

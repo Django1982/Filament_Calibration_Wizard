@@ -24,7 +24,12 @@ interface WizardState {
   result: Record<string, unknown> | null;
 }
 
-export async function renderWizard(root: HTMLElement, projectId: string, stepId: CalibrationId): Promise<void> {
+export async function renderWizard(
+  root: HTMLElement,
+  projectId: string,
+  stepId: CalibrationId,
+  origin?: 'automated'
+): Promise<void> {
   const loaded = await getProject(projectId);
   const def = getCalibration(stepId);
   if (!loaded || !def) {
@@ -401,7 +406,7 @@ export async function renderWizard(root: HTMLElement, projectId: string, stepId:
             h('div', {}, h('strong', {}, 'I\'d like to retest this later'),
               h('p', { class: 'coach-note' }, 'Marks the step as done but flags it for a future re-run.'))),
           field('Notes', notes),
-          field('Photos of the test print (stored on this device only)', photoInput, 'Optional. Photos never leave your device; they\'re kept for your own reference (and future offline analysis features).'),
+          field('Photos of the test print', photoInput, 'Optional. Photos stay private to you — kept in this browser, or on your own self-hosted server if you\'ve connected one; never sent to a third party.'),
           photoList,
           h('div', { class: 'btn-row' },
             h('button', { class: 'btn', onClick: () => { state.stage = stages[idx - 1]; persist(); renderStage(); } }, '← Back'),
@@ -413,8 +418,15 @@ export async function renderWizard(root: HTMLElement, projectId: string, stepId:
                 });
                 toast(`${def.shortName} saved.`, 'success');
                 setLeaveGuard(null);
-                const next = project.stepOrder[project.stepOrder.indexOf(stepId) + 1];
-                navigate(next ? `#/wizard/${project.id}/${next}` : `#/project/${project.id}`);
+                // When this test was opened from the automated pipeline (to record
+                // a measured result), return there instead of walking to the next
+                // MANUAL step — the automated screen is the driver in that flow.
+                if (origin === 'automated') {
+                  navigate(`#/automated/${project.id}`);
+                } else {
+                  const next = project.stepOrder[project.stepOrder.indexOf(stepId) + 1];
+                  navigate(next ? `#/wizard/${project.id}/${next}` : `#/project/${project.id}`);
+                }
               }
             }, '✓ Save & continue')
           )

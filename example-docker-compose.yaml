@@ -1,5 +1,7 @@
 services:
   perfectfit:
+    # No prebuilt image is published — `build` makes Compose build it from this repo.
+    build: .
     image: perfectfit:latest
     container_name: perfectfit
     restart: unless-stopped
@@ -11,6 +13,10 @@ services:
       - "traefik.http.routers.perfectfit.tls=true"
       - "traefik.http.routers.perfectfit.tls.certresolver=letsencrypt"
       - "traefik.http.services.perfectfit.loadbalancer.server.port=80"
+    environment:
+      - PERFECTFIT_API_TOKEN=${PERFECTFIT_API_TOKEN:-}
+    volumes:
+      - perfectfit-data:/data
 
 networks:
   containers:
@@ -19,3 +25,6 @@ networks:
     attachable: true
     driver_opts:
       com.docker.network.bridge.name: br-containers
+
+volumes:
+  perfectfit-data:

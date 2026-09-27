@@ -25,3 +25,10 @@ tauri = { version = "2.11.3", features = [] }
 tauri-plugin-log = "2"
 tauri-plugin-dialog = "2"
 sha2 = "0.10"
+# Assemble Orca project 3mf files (a 3mf is a zip). Lean feature set: only the
+# deflate codec Orca projects use — no bzip2/zstd/aes/lzma.
+zip = { version = "2", default-features = false, features = ["deflate"] }
+# Download-on-demand of the pinned managed OrcaSlicer (Stage 9). Blocking client
+# with pure-Rust rustls TLS (no OpenSSL) — fits the blocking process runner. No
+# gzip/json/cookies features: we stream one binary asset to disk and hash it.
+ureq = { version = "2", default-features = false, features = ["tls"] }

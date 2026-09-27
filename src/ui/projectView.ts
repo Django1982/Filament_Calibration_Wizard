@@ -8,6 +8,7 @@ import { copyFinalsToClipboard } from './report';
 import { STEP_DEPENDENCY_WARNINGS } from '../logic/ranges';
 import { getMaterial } from '../data/materials';
 import { presetBackupCallout } from './presetBackupPrompt';
+import { isAutomatedCalibrationEnabled } from '../automatedCalibration';
 import type { CalibrationProject, CalibrationId } from '../types';
 
 export async function renderProject(root: HTMLElement, id: string): Promise<void> {
@@ -55,6 +56,7 @@ export async function renderProject(root: HTMLElement, id: string): Promise<void
     h('div', { class: 'btn-row' },
       stage ? h('a', { class: 'btn btn-primary', href: `#/wizard/${p.id}/${stage}` }, `▶ Continue: ${getCalibration(stage).shortName}`) : null,
       hasCalibratedValues(p) ? h('a', { class: `btn ${stage ? '' : 'btn-primary'}`, href: `#/profile/${p.id}` }, '🧵 Create Slicer Profile') : null,
+      isAutomatedCalibrationEnabled() ? h('a', { class: 'btn', href: `#/automated/${p.id}` }, '🤖 Automated calibration') : null,
       h('a', { class: 'btn', href: `#/report/${p.id}` }, '📄 Report'),
       h('a', { class: 'btn', href: `#/card/${p.id}` }, '🪪 Calibration card'),
       h('button', { class: 'btn', onClick: () => copyFinalsToClipboard(p) }, '📋 Copy final settings'),
