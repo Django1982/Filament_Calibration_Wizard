@@ -29,6 +29,10 @@ self.addEventListener('fetch', (event) => {
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return; // never touch third-party requests
+  // The opt-in self-hosted backend's API is live data, never static/immutable —
+  // let it hit the network untouched. Caching it would make backend-detection
+  // and data reads silently go stale after the first successful response.
+  if (url.pathname.includes('/api/v1/')) return;
 
   const fetchAndCache = () => fetch(req).then((res) => {
     if (res.ok) {

@@ -1,5 +1,12 @@
 # PerfectFit — Filament Calibration Wizard
 
+> [!NOTE]
+> **Status: maintenance mode.** I'm no longer adding features here. My calibration work has
+> moved into **[Forca Slicer](https://github.com/tayloraaron078-tech/ForcaSlicer)**, a free
+> OrcaSlicer fork with a guided, more automated Calibration Wizard built into the slicer
+> (Windows alpha for now). PerfectFit keeps working for stock OrcaSlicer and Bambu Studio;
+> bug reports are still welcome, but expect slower fixes.
+
 Create a perfectly calibrated filament profile for Orca Slicer or Bambu Studio in one guided workflow. No tutorials, no guesswork, no spreadsheets.
 
 <img width="1148" height="1007" alt="Hero" src="https://github.com/user-attachments/assets/f56b6877-6558-460a-9df0-097523c63046" />
@@ -15,8 +22,9 @@ without tutorials, wikis, or guesswork.
 - **No black boxes**: every calculation shows inputs, formula, substitution, and rounding.
 - **Signature features**: calibration timeline, confidence score, smart retest recommendations,
   printable one-page calibration card with QR, printable full report, JSON backup/restore.
-- **Privacy**: no account, no backend, no analytics/telemetry. Everything (photos included)
-  stays in your browser's local storage. External model links open third-party sites.
+- **Privacy**: no account, no analytics/telemetry, no backend by default — everything (photos
+  included) stays in your browser's local storage. An opt-in [self-hosted server](#self-hosted-server-mode)
+  is never a third party either. External model links open third-party sites.
 
 <img width="1102" height="831" alt="Create Project" src="https://github.com/user-attachments/assets/36fc37fd-c053-4746-814b-48919f965853" />
 
@@ -150,22 +158,78 @@ Served over HTTP(S), the app also installs as a PWA and works offline after firs
 
 The repository ships a `Dockerfile` and an `example-docker-compose.yaml` for
 running the app as a container. The image is a multi-stage build: Node builds
-the static bundle, which is then served by a tiny BusyBox `httpd` — no Node,
-backend, or database in the runtime layer.
+the static bundle, then a `node:24-slim` runtime layer serves both that
+bundle and the opt-in self-hosted persistence API (`server/`, Node's built-in
+`http` + `node:sqlite`, no extra npm dependencies) on one origin.
 
 ```bash
 docker build -t perfectfit:latest .
-docker run -d -p 8080:80 --name perfectfit perfectfit:latest   # http://localhost:8080
+docker run -d -p 8080:80 --name perfectfit \
+  -v perfectfit-data:/data \
+  perfectfit:latest   # http://localhost:8080
 ```
 
 `example-docker-compose.yaml` is a sample stack for reverse-proxying the
 container behind [Traefik](https://traefik.io/) with automatic Let's Encrypt
 TLS. Adjust the `Host(...)` rule, network, and image name to match your setup.
+No prebuilt image is published to a registry, so run Compose from a clone of this
+repository (`docker compose -f example-docker-compose.yaml up -d --build`) — or build the
+image first as shown above. Otherwise Docker fails with "pull access denied for perfectfit".
 Because the app uses hash-based routing and relative paths, the static server
 needs no SPA-fallback configuration.
 
-> The same per-origin storage note from the Nginx section applies: data lives
-> in the browser under the origin you serve from.
+### Self-hosted server mode
+
+Running the container gives you server-side persistence automatically —
+there's nothing to turn on. The app probes for the API at startup; when it
+finds one, projects, printer profiles, photos, and settings are read from and
+written to the server's SQLite database (bind-mounted at `/data` by default)
+instead of the browser's IndexedDB, so your data is no longer tied to one
+browser/device. If no server responds (e.g. you're just running `npm run
+build` output on plain Nginx, or opening `dist/index.html` directly), the app
+falls back to the original browser-only storage with no change in behavior.
+
+By default the server has **no authentication** — fine for a container only
+reachable on your own LAN/VPN. To require a token, set `PERFECTFIT_API_TOKEN`
+on the container (see `example-docker-compose.yaml`):
+
+```bash
+openssl rand -hex 32   # generate a token
+docker run -d -p 8080:80 --name perfectfit \
+  -v perfectfit-data:/data \
+  -e PERFECTFIT_API_TOKEN=<generated token> \
+  perfectfit:latest
+```
+
+Only rely on this token behind TLS (e.g. the Traefik example) — it's sent as
+a plain `Authorization: Bearer` header, not a full auth system. Once a token
+is set, the app's Settings → *Server connection* card prompts for it before
+data will load or save. You can hand it to a browser once via
+`https://your-host/?token=<token>` — the app stores it in localStorage and
+strips it from the URL immediately, so it never lingers in history or
+bookmarks.
+
+**Connecting a client that isn't served by the server itself** (the desktop
+app below, or a browser tab opened at some other address): a relative
+`/api/v1/...` request only reaches the server when the page is served BY it.
+For anything else, open Settings → *Server connection* and enter the
+server's own URL (`https://your-host:8080`) in the "Server URL" field — this
+switches the app to absolute requests against that address. Same as the
+token, a one-time link can set it too: `https://your-host/?server=<url>`, and
+`?token=` and `?server=` can be combined in one link for onboarding a new
+device in a single step.
+
+**Migrating existing browser-only data to a server-connected instance:** in
+the OLD instance (the one with your existing projects/printers/photos in
+browser storage), go to Settings → *⭳ Export all data + photos* to download a
+backup. Open the NEW server-connected instance and use Settings → *📥 Restore
+from backup* to import it — same export/restore mechanism used for regular
+backups, it works identically whether the destination is browser-only or
+server-backed.
+
+> The same per-origin storage note from the Nginx section applies when no
+> server is connected: data lives in the browser under the origin you serve
+> from.
 
 ## Packaging as a desktop app (Tauri)
 
@@ -185,15 +249,20 @@ npx tauri build    # produces the native app plus configured bundles for the cur
 ```
 
 No code changes are required — the app already avoids absolute URLs and needs no server.
-Inside Tauri, data persists in the WebView's local storage; the JSON backup/restore in
-Settings is the supported migration path between browser and desktop builds.
+Inside Tauri, data persists in the WebView's local storage by default; the JSON
+backup/restore in Settings is the supported migration path between browser and desktop
+builds. The desktop app can also connect to a [self-hosted
+server](#self-hosted-server-mode) the same way any other non-same-origin client does —
+Tauri loads its assets from `tauri://`, not from the server, so a relative request never
+reaches it; enter the server's URL in Settings → *Server connection* (or use a one-time
+`?server=`/`?token=` link) to switch it to absolute requests against your server instead.
 
 ## Data storage & backups
 
 | What | Where |
 |---|---|
-| Projects, printer profiles, photos | IndexedDB (`perfectfit-db`) |
-| Settings, in-progress form drafts | localStorage |
+| Projects, printer profiles, photos | IndexedDB (`perfectfit-db`) — or the server's SQLite database if you're connected to one, see [Docker → Self-hosted server mode](#self-hosted-server-mode) |
+| Settings, in-progress form drafts | localStorage (settings also sync to the server when connected) |
 | Backups | JSON files you export (Settings → Backup) |
 
 - **Backup**: Settings → *Export all data* (optionally with photos, base64-embedded).
@@ -260,9 +329,13 @@ Adding a calibration test = new entry in `data/calibrations.ts` + a form control
 - The QR code on the calibration card links to the app URL + project id — it opens the saved
   calibration on any device pointed at the **same hosted instance & browser profile**; it does
   not embed the data itself (the printed card carries the values in plain text).
-- No slicer preset **file** export: Orca/Bambu preset JSON formats are version-volatile and
-  were not safely verifiable for round-tripping, so the app deliberately guides manual entry
-  instead of risking a broken preset. (Candidate for a future "experimental" feature.)
+- **Direct slicer profile installation is experimental and Windows-verified only.**
+  PerfectFit can generate, diff, validate, and export calibrated filament presets for the
+  Orca-family slicers (Orca Slicer, Bambu Studio, Snapmaker Orca, ElegooSlicer, Flash Studio /
+  Orca-Flashforge) behind an experimental feature flag. Exporting a preset file works on any
+  platform, including the browser build. Writing the preset directly into a slicer's profile
+  folder is currently verified on Windows only, per slicer version — export remains the safe
+  fallback everywhere else.
 - Photos are stored and exported but not analyzed (AI photo evaluation is a designed-for,
   not-built v1 exclusion, like accounts, cloud sync, and printer control).
 - Bambu Studio Developer mode exposes retraction, Max flowrate, and VFA calibration while a Bambu printer is selected; external models remain fallback options
@@ -291,8 +364,8 @@ Version 1.4.0 is already in active development and aims to significantly streaml
 ## Future ideas
 
 AI-assisted photo evaluation (storage schema already reserves an `analysis` field), photo
-comparison, multiple nozzles/printers per filament, printer API integration, experimental
-slicer preset export, community preset sharing, filament inventory with drying/spool tracking.
+comparison, multiple nozzles/printers per filament, printer API integration, community preset
+sharing, filament inventory with drying/spool tracking.
 
 ## License
 

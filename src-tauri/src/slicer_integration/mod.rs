@@ -13,9 +13,14 @@
 
 pub mod backup;
 pub mod discovery;
+pub mod engine;
 pub mod filesystem;
+pub mod flow_test;
 pub mod install;
+pub mod model_project;
+pub mod preset_resolver;
 pub mod processes;
+pub mod project_assembly;
 pub mod security;
 
 /// Static, verified per-slicer detection data.
@@ -130,22 +135,55 @@ pub fn now_unix() -> u64 {
         .unwrap_or(0)
 }
 
+/// Shared support for the supervised real-Orca probes (the `#[ignore]`d tests).
+///
+/// Those probes drive an actual OrcaSlicer install, so they can only run where
+/// one exists. They used to hardcode `C:\Program Files\OrcaSlicer`, which meant
+/// they only worked on the exact machine they were authored on. This module
+/// reads the install root (and the pinned-download zip) from environment
+/// variables with a sensible default, so anyone with Orca — including the
+/// Stage-10 integration CI lane, which fetches the pinned build — can run
+/// `cargo test -- --ignored` by pointing `PERFECTFIT_ORCA_ROOT` at their install.
 #[cfg(test)]
-mod tests {
-    use super::*;
+pub(crate) mod test_support {
+    use std::path::PathBuf;
 
-    /// Pins the confirmed Linux `comm=` names (docs/SLICER_PROFILE_RESEARCH.md,
-    /// verified 2026-07-28 via `ps -axo comm=` against live instances). Neither
-    /// is the plain executable basename — that was the original, wrong guess —
-    /// so this guards against silently reverting to it.
-    #[test]
-    fn linux_process_names_match_confirmed_comm_output() {
-        let orca = descriptor("orca").unwrap();
-        assert!(orca.process_names.contains(&"orcaslicer_main"));
-        assert!(!orca.process_names.contains(&"orca-slicer"));
+    /// Root of an OrcaSlicer install for the supervised probes. Override with
+    /// `PERFECTFIT_ORCA_ROOT`; defaults to the standard Windows install path.
+    pub(crate) fn orca_root() -> PathBuf {
+        std::env::var_os("PERFECTFIT_ORCA_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(r"C:\Program Files\OrcaSlicer"))
+    }
 
-        let bambu = descriptor("bambu").unwrap();
-        assert!(bambu.process_names.contains(&"bambustu_main"));
-        assert!(!bambu.process_names.contains(&"bambu-studio"));
+    /// The Orca executable under the install root.
+    pub(crate) fn orca_exe() -> PathBuf {
+        orca_root().join(if cfg!(windows) {
+            "orca-slicer.exe"
+        } else {
+            "orca-slicer"
+        })
+    }
+
+    /// `<root>/resources`.
+    pub(crate) fn orca_resources() -> PathBuf {
+        orca_root().join("resources")
+    }
+
+    /// A file under `<root>/resources/calib/…` (e.g. `"temperature_tower/temperature_tower.stl"`).
+    pub(crate) fn orca_calib(rel: &str) -> PathBuf {
+        orca_resources().join("calib").join(rel)
+    }
+
+    /// A vendor's profile dir, `<root>/resources/profiles/<vendor>`.
+    pub(crate) fn orca_profiles(vendor: &str) -> PathBuf {
+        orca_resources().join("profiles").join(vendor)
+    }
+
+    /// The pinned managed-Orca download zip, for the staging probe. Set
+    /// `PERFECTFIT_ORCA_ZIP` to the downloaded `OrcaSlicer_Windows_V2.4.2_x64_portable.zip`;
+    /// unset means the probe skips (it never hardcodes a session scratchpath).
+    pub(crate) fn orca_pinned_zip() -> Option<PathBuf> {
+        std::env::var_os("PERFECTFIT_ORCA_ZIP").map(PathBuf::from)
     }
 }

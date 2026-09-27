@@ -194,6 +194,23 @@ export interface CalibrationProject {
    * absent on older projects). Present once the user backed up or dismissed.
    */
   presetBackup?: PresetBackupRecord;
+
+  // --- Automated calibration session (schema v5; all optional) -------------
+  // Present only once an automated session is started (behind the disabled
+  // `automatedCalibration` flag). Absent on every existing project, which keeps
+  // the current manual workflow completely unaffected. Types live in
+  // src/automatedCalibration/types.ts; referenced inline (like generatedProfiles
+  // above) to avoid a circular top-level import.
+  /** Sub-schema version for the automated session fields (independent of the
+   *  app-wide storage SCHEMA_VERSION). */
+  automatedSchemaVersion?: number;
+  slicerMode?: import('./automatedCalibration/types').SlicerMode;
+  sessionStatus?: import('./automatedCalibration/types').CalibrationSessionStatus;
+  workingProfile?: import('./automatedCalibration/types').TemporaryCalibrationProfile;
+  generatedJobs?: import('./automatedCalibration/types').GeneratedJobRecord[];
+  sessionWarnings?: import('./automatedCalibration/types').SessionWarning[];
+  selectedEngineId?: import('./automatedCalibration/types').EngineId;
+  manualOrcaPreset?: import('./automatedCalibration/types').ManualOrcaPresetSelection;
 }
 
 /** Result of the "back up your slicer presets before calibrating" prompt. */

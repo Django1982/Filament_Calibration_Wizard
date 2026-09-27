@@ -126,7 +126,7 @@ describe('data migration', () => {
       printers: []
     } as unknown as BackupFile;
     const out = migrate(file);
-    expect(out.schemaVersion).toBe(4);
+    expect(out.schemaVersion).toBe(5);
     const p = out.projects[0];
     expect(Array.isArray(p.timeline)).toBe(true);
     expect(p.finals).toBeDefined();

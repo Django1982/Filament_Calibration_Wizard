@@ -11,6 +11,7 @@ import { hasCalibratedValues } from './projectView';
 import { maybeFirstRunBackupCard } from './presetBackupPrompt';
 import type { CalibrationProject, PrinterProfile } from '../types';
 import { getMaterial } from '../data/materials';
+import { isAutomatedCalibrationEnabled, isResumable } from '../automatedCalibration';
 
 export async function renderDashboard(root: HTMLElement): Promise<void> {
   const [projects, printers] = await Promise.all([listProjects(), listPrinters()]);
@@ -92,6 +93,9 @@ function projectCard(p: CalibrationProject, printers: Map<string, PrinterProfile
     h('p', { class: 'proj-sub' },
       `${pct}% complete · ${stage ? `next: ${getCalibration(stage).shortName}` : 'all steps done'} · updated ${new Date(p.updatedAt).toLocaleDateString()}`),
     vals.length ? h('div', { class: 'proj-vals' }, vals) : null,
+    isAutomatedCalibrationEnabled() && isResumable(p)
+      ? h('p', {}, h('a', { class: 'btn btn-sm btn-primary', href: `#/automated/${p.id}` }, '🤖 Resume automated session'))
+      : null,
     h('div', { class: 'proj-actions' },
       stage
         ? h('a', { class: 'btn btn-primary btn-sm', href: `#/wizard/${p.id}/${stage}` }, '▶ Continue')

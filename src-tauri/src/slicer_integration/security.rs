@@ -64,6 +64,45 @@ pub fn platform_data_root() -> Result<PathBuf, String> {
     }
 }
 
+/// Root under which PerfectFit keeps its own managed files (engine manifests,
+/// per-session slicer working directories, and sliced artifacts). This is
+/// PerfectFit's own folder — never a slicer's data directory — so nothing here
+/// can collide with or corrupt a slicer install. Created on demand.
+///
+/// The automated pipeline resolves session/job ids (validated components) to
+/// canonical paths *under this root*; the frontend never supplies raw write
+/// paths, exactly like the profile-installer side.
+pub fn perfectfit_managed_root() -> Result<PathBuf, String> {
+    let root = platform_data_root()?.join("PerfectFit");
+    std::fs::create_dir_all(&root)
+        .map_err(|e| format!("Cannot create PerfectFit data root {}: {e}", root.display()))?;
+    Ok(root)
+}
+
+/// Directory holding persisted engine manifests. Created on demand.
+pub fn engines_root() -> Result<PathBuf, String> {
+    let dir = perfectfit_managed_root()?.join("engines");
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("Cannot create engines dir {}: {e}", dir.display()))?;
+    Ok(dir)
+}
+
+/// Resolve the working directory for one calibration job, validating the
+/// session and job ids as single path components so neither can traverse out
+/// of the managed root. Returns `<root>/sessions/<sessionId>/jobs/<jobId>`.
+/// Does not create it — the caller decides which subdirectories it needs.
+pub fn job_root(session_id: &str, job_id: &str) -> Result<PathBuf, String> {
+    validate_component(session_id)?;
+    validate_component(job_id)?;
+    let root = perfectfit_managed_root()?;
+    let dir = root
+        .join("sessions")
+        .join(session_id)
+        .join("jobs")
+        .join(job_id);
+    Ok(dir)
+}
+
 /// Program-files roots searched for slicer executables.
 pub fn program_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();

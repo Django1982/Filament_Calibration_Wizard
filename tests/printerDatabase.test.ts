@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 // The generator is plain ESM (Node built-ins only); vitest imports it directly.
 import {
-  buildDatabase, slugify, parseNozzleList, boolYesNo, normalizeExtruder, parseSheet, num
+  buildDatabase, slugify, parseNozzleList, boolYesNo, normalizeExtruder, parseSheet, num,
+  DATA_REVISION
 } from '../scripts/generate-printer-database.mjs';
 import {
   allPrinterSpecs, getPrinterSpec, groupedPrinterSpecs, profileValuesFromSpec, specLabel,
@@ -176,7 +177,7 @@ describe('backward compatibility / migration', () => {
       exportedAt: '2026-01-01T00:00:00Z', projects: [], printers: [oldPrinter]
     } as unknown as BackupFile;
     const out = migrate(file);
-    expect(out.schemaVersion).toBe(4);
+    expect(out.schemaVersion).toBe(5);
     expect(out.printers[0].isManual).toBe(true);
     // Existing values are preserved, not reset.
     expect(out.printers[0].maxNozzleTemp).toBe(260);
@@ -298,6 +299,51 @@ describe('refreshing saved profiles after a database correction', () => {
     expect(isSpecRefreshAvailable({ ...stale, isManual: true, databasePrinterId: null })).toBe(false);
   });
 
+  it('treats a missing revision as revision 1 and never refreshes downwards', () => {
+    expect(isSpecRefreshAvailable({ ...stale, databaseDataRevision: 1 }))
+      .toBe(isSpecRefreshAvailable({ ...stale, databaseDataRevision: undefined }));
+    // A profile restored from a backup made on a newer build is ahead of the
+    // shipped data — offering to "refresh" it would move it backwards.
+    expect(isSpecRefreshAvailable({ ...stale, databaseDataRevision: PRINTER_DB_DATA_REVISION + 1 })).toBe(false);
+  });
+
+  it('ships a database stamped with the generator\'s current data revision', () => {
+    // Bumping DATA_REVISION without regenerating (or editing the workbook
+    // without bumping) leaves stale profiles never offered a refresh at all.
+    expect(PRINTER_DB_DATA_REVISION).toBe(DATA_REVISION);
+  });
+
+  it('reports nothing when a revised database left this printer untouched', () => {
+    // Two independent gates: a newer revision AND an actual field difference.
+    // Most printers are unaffected by any given correction, so an old revision
+    // alone must not produce a callout.
+    const untouched: PrinterProfile = { ...refreshProfileFromDatabase(stale), databaseDataRevision: 1 };
+    expect(isSpecRefreshAvailable(untouched)).toBe(true);
+    expect(specChangesForProfile(untouched)).toEqual([]);
+  });
+
+  it('never reports or overwrites a field the database has no value for', () => {
+    // A spec the database is silent about (here: chamber temperature) must not
+    // be diffed against "not specified" — that would offer to discard a value
+    // the user measured on modified hardware.
+    const sparse = allPrinterSpecs().find(p => p.maxChamberTempC == null)!;
+    const handTuned: PrinterProfile = {
+      ...stale, ...(profileValuesFromSpec(sparse) as PrinterProfile),
+      databaseDataRevision: 1, maxChamberTemp: 50
+    };
+    expect(specChangesForProfile(handTuned).some(c => c.key === 'maxChamberTemp')).toBe(false);
+    expect(refreshProfileFromDatabase(handTuned).maxChamberTemp).toBe(50);
+  });
+
+  it('degrades quietly when the referenced database record is gone', () => {
+    // Database ids are permanent by contract, but a renamed one must leave the
+    // saved profile usable rather than blanking its specs.
+    const orphan: PrinterProfile = { ...stale, databasePrinterId: 'no-such-printer-9000' };
+    expect(isSpecRefreshAvailable(orphan)).toBe(false);
+    expect(specChangesForProfile(orphan)).toEqual([]);
+    expect(refreshProfileFromDatabase(orphan)).toBe(orphan);
+  });
+
   it('reports the differing fields with before/after values', () => {
     const changes = specChangesForProfile(stale);
     const nozzle = changes.find(c => c.key === 'maxNozzleTemp')!;
@@ -318,5 +364,25 @@ describe('refreshing saved profiles after a database correction', () => {
     expect(fresh.createdAt).toBe('2026-01-01T00:00:00.000Z');
     // Nothing left to offer afterwards.
     expect(isSpecRefreshAvailable(fresh)).toBe(false);
+  });
+
+  it('keeps the id however many specs change, and never mutates the saved profile', () => {
+    const corrupted: PrinterProfile = {
+      ...stale, maxBedTemp: 27, maxVolumetricFlow: 1, nozzleDiameter: 0.2,
+      supportedNozzleDiameters: [0.2], buildVolume: { x: 1, y: 1, z: 1 },
+      extruderType: 'bowden', firmware: 'wrong'
+    };
+    const changed = specChangesForProfile(corrupted).map(c => c.key);
+    expect(changed).toEqual(expect.arrayContaining(
+      ['maxNozzleTemp', 'maxBedTemp', 'buildVolume', 'extruderType', 'firmware']));
+
+    const fresh = refreshProfileFromDatabase(corrupted);
+    expect(fresh.id).toBe('saved-1');
+    // The caller persists the returned copy; the original must be left intact
+    // so a cancelled refresh cannot have already changed anything.
+    expect(corrupted.maxBedTemp).toBe(27);
+    expect(corrupted.buildVolume).toEqual({ x: 1, y: 1, z: 1 });
+    fresh.retractionRange.end = 9;
+    expect(corrupted.retractionRange.end).toBe(2);
   });
 });

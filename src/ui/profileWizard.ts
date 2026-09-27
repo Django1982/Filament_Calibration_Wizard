@@ -7,11 +7,12 @@
 // ---------------------------------------------------------------------------
 
 import { h, clear, field, toast, confirmDialog, download } from './dom';
+import { setLeaveGuard } from '../app';
 import { getProject, getPrinter, saveProject, addTimeline, uid } from '../storage/store';
 import type { CalibrationProject, PrinterProfile } from '../types';
 import type {
   DetectedFilamentProfile, GeneratedFilamentProfile, GeneratedProfileRecord,
-  IntegrationSlicerId, ParsedFilamentProfile, ProfileInstallResult,
+  IntegrationSlicerId, ParsedFilamentProfile, Platform, ProfileInstallResult,
   ProfileValidationResult, ScoredProfile, SlicerInstallation, UserDataLocation
 } from '../slicerIntegration/types';
 import * as bridge from '../slicerIntegration/bridge';
@@ -27,10 +28,11 @@ import { slicerDisplayName, integrationIdsForProjectSlicer, findVerifiedVersion 
 import { loadExperimentalFeatures } from '../slicerIntegration/featureFlags';
 import { buildDiagnosticReport } from '../slicerIntegration/diagnostics';
 import { errorTemplate } from '../slicerIntegration/errors';
+import { completeSession, isAutomatedCalibrationEnabled } from '../automatedCalibration';
 
 type Stage = 'slicer' | 'profiles' | 'configure' | 'preview' | 'result';
 
-interface WizState {
+export interface WizState {
   stage: Stage;
   installations: SlicerInstallation[] | null;
   installation: SlicerInstallation | null;
@@ -53,6 +55,9 @@ interface WizState {
   acknowledged: Set<string>;
   installResult: ProfileInstallResult | null;
   exportedTo: string | null;
+  /** True once the generated profile was installed, exported, or saved in the
+   *  project — from then on there is nothing left to lose by navigating away. */
+  completed: boolean;
 }
 
 const states = new Map<string, WizState>();
@@ -66,16 +71,28 @@ function stateFor(projectId: string): WizState {
       filterCompatibleOnly: true, selectedBase: null, manualSlicerId: 'orca',
       newName: '', targetExtruder: 0, applyAll: false, bakePaGcode: false, enabledPatchKeys: null,
       generated: null, validation: null, acknowledged: new Set(),
-      installResult: null, exportedTo: null
+      installResult: null, exportedTo: null, completed: false
     };
     states.set(projectId, s);
   }
   return s;
 }
 
+// This wizard keeps its state only in `states` (memory) — unlike the calibration
+// wizard there is no draft persistence, so leaving the view really does discard
+// the scan, the base-profile choice and the generated preview.
+export function hasProgressToLose(st: WizState): boolean {
+  if (st.completed) return false;
+  if (st.stage !== 'slicer') return true;
+  // On the first stage only a completed scan or an already-picked base profile
+  // is worth a prompt; re-selecting an installation is a single click.
+  return !!(st.scan || st.selectedBase || st.generated);
+}
+
 export async function renderProfileWizard(root: HTMLElement, projectId: string): Promise<void> {
   const project = await getProject(projectId);
   if (!project) {
+    setLeaveGuard(null);
     root.append(h('div', { class: 'card' }, h('h1', {}, 'Project not found'),
       h('a', { class: 'btn btn-primary', href: '#/' }, 'Back to dashboard')));
     return;
@@ -85,12 +102,25 @@ export async function renderProfileWizard(root: HTMLElement, projectId: string):
   const flags = loadExperimentalFeatures();
 
   if (!flags.slicerProfileGeneration) {
+    setLeaveGuard(null);
     root.append(h('div', { class: 'card' },
       h('h1', {}, 'Slicer profile generation is disabled'),
       h('p', {}, 'Enable “Experimental: slicer profile generation” in Settings to use this feature.'),
       h('a', { class: 'btn btn-primary', href: `#/project/${projectId}` }, 'Back to project')));
     return;
   }
+
+  // Warn before leaving once there is progress that navigation would discard.
+  // The closure reads `st` (the live entry from `states`), so re-arming it on
+  // every rerender is harmless — it always sees the current stage.
+  setLeaveGuard(async () => {
+    if (!hasProgressToLose(st)) return true;
+    return confirmDialog({
+      title: 'Leave the profile wizard?',
+      body: 'This wizard keeps its progress only while the page is open — the scanned presets, your base profile choice and the generated profile are discarded when you leave. Leave now?',
+      confirmLabel: 'Leave'
+    });
+  });
 
   const rerender = () => { clear(root); void renderProfileWizard(root, projectId); };
 
@@ -129,6 +159,19 @@ function stageNav(st: WizState): HTMLElement {
 
 // --- stage 1: slicer --------------------------------------------------------
 
+/** Open call for macOS users to verify install paths and process names. */
+const MACOS_VERIFICATION_ISSUE_URL =
+  'https://github.com/tayloraaron078-tech/Filament_Calibration_Wizard/issues/24';
+
+/**
+ * Direct install is only verified on Windows so far. macOS users are pointed at the
+ * verification issue so they can help; Linux verification is being done separately
+ * and deliberately has no call for help here yet.
+ */
+export function macosVerificationNoticeUrl(platform: Platform): string | null {
+  return platform === 'macos' ? MACOS_VERIFICATION_ISSUE_URL : null;
+}
+
 async function renderSlicerStage(
   root: HTMLElement, st: WizState, project: CalibrationProject, rerender: () => void
 ): Promise<void> {
@@ -157,6 +200,17 @@ async function renderSlicerStage(
     return;
   }
 
+  // Resolved once for the whole stage: the per-version verification lookup below must
+  // match the user's actual OS, not an assumed one.
+  const platform = await currentPlatform();
+  const macosNoticeUrl = macosVerificationNoticeUrl(platform);
+  if (macosNoticeUrl) {
+    card.append(h('p', { class: 'field-help' },
+      'macOS support for direct profile installation is unverified. You can help: ',
+      h('a', { href: macosNoticeUrl, target: '_blank', rel: 'noopener' },
+        'verify the install paths on macOS ↗')));
+  }
+
   const preferred = integrationIdsForProjectSlicer(project.slicer.slicer);
   const sorted = [...st.installations].sort((a, b) =>
     Number(preferred.includes(b.slicerId)) - Number(preferred.includes(a.slicerId)));
@@ -167,7 +221,6 @@ async function renderSlicerStage(
   }
 
   for (const inst of sorted) {
-    const platform = 'windows' as const; // desktop build platform is resolved natively; registry lookup below re-checks
     const verified = findVerifiedVersion(inst.slicerId, inst.version, platform);
     const canInstall = inst.capabilities.canInstallDirectly;
     const locations = inst.userDataLocations;
@@ -680,6 +733,60 @@ async function persistRecord(
   await saveProject(project);
 }
 
+/** When this project has an automated calibration session still open (the user
+ *  reached here via the Stage 8 "Finish calibration" handoff), offer to return
+ *  to it or close it out now that a tuned profile has been installed/exported.
+ *  Returns null when there's no open session or the flag is off. */
+function automatedSessionCloseout(
+  project: CalibrationProject, rerender: () => void
+): HTMLElement | null {
+  const status = project.sessionStatus;
+  const open = isAutomatedCalibrationEnabled()
+    && status !== undefined
+    && status !== 'completed' && status !== 'cancelled' && status !== 'failed';
+  if (!open) return null;
+  return h('div', { class: 'card' },
+    h('h3', { style: 'margin-top:0' }, 'Automated calibration session'),
+    h('p', {}, 'This project has an automated calibration session in progress. Now that your tuned profile is ready, you can close it out.'),
+    h('div', { class: 'btn-row' },
+      h('a', { class: 'btn', href: `#/automated/${project.id}` }, '← Back to automated session'),
+      h('button', {
+        class: 'btn btn-primary', onClick: async () => {
+          const ok = await confirmDialog({
+            title: 'Mark this automated session complete?',
+            body: 'This closes the automated session. Your recorded results and this profile are kept — you can still create or re-install a profile afterward, and you can always start a new session later.',
+            confirmLabel: 'Mark complete'
+          });
+          if (!ok) return;
+          const res = completeSession(project);
+          if (!res.ok) { toast(res.reason ?? 'Could not complete the session.', 'error'); return; }
+          await saveProject(project);
+          toast('Automated session marked complete.', 'success');
+          rerender();
+        }
+      }, '✓ Mark automated session complete')));
+}
+
+/** The printer presets the generated filament is bound to. Bambu Studio / Orca
+ *  only list a filament under the printer named in `compatible_printers`; when
+ *  none match the printer the user has selected, the slicer still installs it but
+ *  files it under the "Unsupported presets" group — where it reads as "missing"
+ *  even though nothing is wrong. Naming the bound printer(s) here turns that
+ *  silent mismatch into something the user can act on. An empty list means the
+ *  preset is compatible with every printer, so there is nothing to warn about. */
+function compatiblePrintersNote(gen: GeneratedFilamentProfile): HTMLElement | null {
+  const raw = gen.data.compatible_printers;
+  const printers = Array.isArray(raw)
+    ? raw.filter((x): x is string => typeof x === 'string' && x.trim() !== '')
+    : [];
+  if (printers.length === 0) return null;
+  return h('p', { class: 'field-help' },
+    'Compatible with: ', h('strong', {}, printers.join(', ')), '. ',
+    'Select that exact printer preset in your slicer. If the filament is missing from the ',
+    h('strong', {}, 'Custom'), ' list, look under ', h('strong', {}, '“Unsupported presets”'),
+    ' — that means a different printer is currently selected.');
+}
+
 function renderResultStage(
   root: HTMLElement, st: WizState, project: CalibrationProject, rerender: () => void
 ): void {
@@ -695,6 +802,7 @@ function renderResultStage(
       h('h2', { style: 'margin-top:0' }, '✅ Profile Installed Successfully'),
       h('p', {}, h('strong', {}, gen.name), ` — installed into ${st.installation!.displayName}.`),
       h('p', { class: 'field-help' }, `Based on: ${gen.baseProfileName}`),
+      compatiblePrintersNote(gen),
       h('h3', {}, 'Applied'),
       h('ul', { style: 'margin:.2rem 0;padding-left:1.2rem' }, applied.map(a => h('li', {}, a))),
       h('p', {}, `A backup was created before installation${res.backupId ? ` (id ${res.backupId})` : ''}. The installed file was re-read and verified.`),
@@ -706,11 +814,15 @@ function renderResultStage(
         res.backupId ? h('button', { class: 'btn', onClick: () => bridge.openBackupDirectory(res.backupId!).catch(e => toast(String(e), 'error')) }, '🗄 View backup') : null,
         h('a', { class: 'btn', href: `#/report/${project.id}` }, '📄 View calibration report'))
     ));
+    const co = automatedSessionCloseout(project, rerender);
+    if (co) root.append(co);
     return;
   }
 
   const card = h('div', { class: 'card' }, h('h2', { style: 'margin-top:0' }, 'Install or export'));
   root.append(card);
+  const compatNote = compatiblePrintersNote(gen);
+  if (compatNote) card.append(compatNote);
 
   if (res && res.error) {
     const t = errorTemplate(res.error.code);
@@ -735,6 +847,7 @@ function renderResultStage(
             if (dest === null) return; // cancelled
             st.exportedTo = dest;
             await persistRecord(project, st, 'export', dest, null, null, true);
+            st.completed = true;
             toast(dest === 'download' ? 'Profile downloaded.' : `Saved to ${dest}`, 'success');
             rerender();
           } catch (e) { toast(String(e), 'error'); }
@@ -768,12 +881,21 @@ function renderResultStage(
       h('button', {
         class: 'btn', onClick: async () => {
           await persistRecord(project, st, 'saved', null, null, null, true);
+          st.completed = true;
           toast('Profile saved in the project.', 'success');
         }
       }, '💾 Save in project')));
 
   card.append(h('div', { class: 'btn-row', style: 'margin-top:.6rem' },
-    h('button', { class: 'btn btn-ghost', onClick: () => { st.stage = 'preview'; rerender(); } }, '← Back to preview')));
+    h('button', {
+      class: 'btn btn-ghost', onClick: () => { st.completed = false; st.stage = 'preview'; rerender(); }
+    }, '← Back to preview')));
+
+  // After a successful export, offer to close out an open automated session too.
+  if (st.exportedTo) {
+    const co = automatedSessionCloseout(project, rerender);
+    if (co) root.append(co);
+  }
 
   async function doInstall(allowReplace: boolean): Promise<void> {
     if (!st.installation || !st.location || !gen) return;
@@ -802,12 +924,15 @@ function renderResultStage(
         confirmLabel: 'Replace (with backup)', danger: true
       });
       if (replace) return void doInstall(true);
+      // Back to editing: anything done from here on is unsaved again.
+      st.completed = false;
       st.stage = 'configure'; rerender(); return;
     }
 
     st.installResult = result;
     await persistRecord(project, st, 'install',
       result.installedFiles[0] ?? null, result.backupId, result.verificationPassed, result.success);
+    if (result.success) st.completed = true;
     rerender();
   }
 }
