@@ -87,6 +87,20 @@ pub fn open_slicer(slicer_id: String) -> Result<(), String> {
                 return Ok(());
             }
         }
+        // Linux candidates are directly executable files (native binary or an
+        // AppImage `AppRun`), so they are spawned like the Windows ones — no
+        // `open`/`xdg-open` wrapper, which would only be needed for a bundle
+        // or a .desktop entry.
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+        for cand in s.linux_exe_candidates {
+            let p = root.join(cand);
+            if p.is_file() {
+                Command::new(&p)
+                    .spawn()
+                    .map_err(|e| format!("Failed to launch: {e}"))?;
+                return Ok(());
+            }
+        }
     }
     Err("SLICER_NOT_FOUND: executable not detected".into())
 }

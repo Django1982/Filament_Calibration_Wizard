@@ -55,8 +55,8 @@ pub fn platform_data_root() -> Result<PathBuf, String> {
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
-        // Linux (XDG) — detection preserved for completeness; install stays
-        // gated by the per-version registry, which has no Linux entries yet.
+        // Linux (XDG) — confirmed 2026-07-28 against a real OrcaSlicer/BambuStudio
+        // install ($XDG_CONFIG_HOME unset → ~/.config).
         std::env::var("XDG_CONFIG_HOME")
             .map(PathBuf::from)
             .or_else(|_| std::env::var("HOME").map(|h| PathBuf::from(h).join(".config")))
@@ -122,6 +122,35 @@ pub fn program_roots() -> Vec<PathBuf> {
             roots.push(PathBuf::from(home).join("Applications"));
         }
     }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        // Linux has no single program-files root: native packages put the binary
+        // in a PATH directory (verified 2026-07-28: /usr/bin/orca-slicer,
+        // /usr/bin/bambu-studio) while AppImage-style desktop integrations live
+        // under /opt (e.g. /opt/orca-slicer/AppRun). PATH is searched first so a
+        // native install wins; the fixed roots are appended for the case where
+        // PATH is trimmed. /usr/bin is normally already in PATH, hence the dedup.
+        use std::collections::HashSet;
+        let mut seen: HashSet<PathBuf> = HashSet::new();
+        let path_dirs: Vec<PathBuf> = std::env::var("PATH")
+            .map(|p| std::env::split_paths(&p).collect())
+            .unwrap_or_default();
+        let fixed = [
+            PathBuf::from("/usr/bin"),
+            PathBuf::from("/usr/local/bin"),
+            PathBuf::from("/opt"),
+        ];
+        for dir in path_dirs.into_iter().chain(fixed) {
+            // An empty PATH entry means "current directory" on POSIX — never
+            // search that for an executable to launch.
+            if dir.as_os_str().is_empty() {
+                continue;
+            }
+            if seen.insert(dir.clone()) {
+                roots.push(dir);
+            }
+        }
+    }
     roots
 }
 
@@ -169,5 +198,39 @@ pub fn validate_preset_extension(name: &str) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!("Unsupported file extension: {name}"))
+    }
+}
+
+#[cfg(test)]
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+mod linux_tests {
+    use super::*;
+
+    /// Deliberately reads $PATH without modifying it: mutating a process-global
+    /// env var races with the rest of the suite. These invariants hold for any
+    /// $PATH value, and on a normal machine (where $PATH already contains
+    /// /usr/bin) the no-duplicates assertion is what actually exercises the
+    /// dedup against the appended fixed roots.
+    #[test]
+    fn program_roots_are_unique_non_empty_and_include_the_fixed_roots() {
+        let roots = program_roots();
+        let mut seen = std::collections::HashSet::new();
+        for r in &roots {
+            assert!(
+                !r.as_os_str().is_empty(),
+                "empty program root (an empty $PATH entry means CWD)"
+            );
+            assert!(
+                seen.insert(r.clone()),
+                "duplicate program root: {}",
+                r.display()
+            );
+        }
+        for fixed in ["/usr/bin", "/usr/local/bin", "/opt"] {
+            assert!(
+                roots.iter().any(|r| r.as_path() == Path::new(fixed)),
+                "missing fixed program root {fixed}"
+            );
+        }
     }
 }

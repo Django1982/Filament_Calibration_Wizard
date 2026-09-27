@@ -106,9 +106,31 @@ fn find_user_locations(data_dir: &Path, preset_folder: &Option<String>) -> Vec<R
     out
 }
 
-fn find_executable(candidates: &[&str], macos_candidates: &[&str]) -> Option<PathBuf> {
-    let _ = (candidates, macos_candidates); // each cfg branch uses one of them
-    for root in security::program_roots() {
+fn find_executable(
+    candidates: &[&str],
+    macos_candidates: &[&str],
+    linux_candidates: &[&str],
+) -> Option<PathBuf> {
+    find_executable_in(
+        &security::program_roots(),
+        candidates,
+        macos_candidates,
+        linux_candidates,
+    )
+}
+
+/// Roots are an explicit parameter so tests exercise the real matching logic
+/// against a temp directory instead of the machine's actual program roots —
+/// same reason `install::install_core` takes its directories explicitly.
+fn find_executable_in(
+    roots: &[PathBuf],
+    candidates: &[&str],
+    macos_candidates: &[&str],
+    linux_candidates: &[&str],
+) -> Option<PathBuf> {
+    // each cfg branch uses one of them
+    let _ = (candidates, macos_candidates, linux_candidates);
+    for root in roots {
         #[cfg(target_os = "windows")]
         for cand in candidates {
             let p = root.join(cand);
@@ -123,9 +145,15 @@ fn find_executable(candidates: &[&str], macos_candidates: &[&str]) -> Option<Pat
                 return Some(p);
             }
         }
+        // Linux candidates are plain executable files (a native binary or an
+        // AppImage `AppRun`), so is_file() applies here as it does on Windows —
+        // unlike macOS, where the candidate is an .app bundle directory.
         #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-        {
-            let _ = (&root, candidates, macos_candidates);
+        for cand in linux_candidates {
+            let p = root.join(cand);
+            if p.is_file() {
+                return Some(p);
+            }
         }
     }
     None
@@ -137,7 +165,11 @@ pub fn detect_supported_slicers() -> Result<Vec<RawDetectedSlicer>, String> {
     let mut result = Vec::new();
     for s in SLICERS {
         let data_dir = data_root.join(s.data_dir_name);
-        let exe = find_executable(s.windows_exe_candidates, s.macos_app_candidates);
+        let exe = find_executable(
+            s.windows_exe_candidates,
+            s.macos_app_candidates,
+            s.linux_exe_candidates,
+        );
         if !data_dir.is_dir() && exe.is_none() {
             continue; // not installed
         }
@@ -200,6 +232,111 @@ pub fn get_platform_info() -> PlatformInfo {
     PlatformInfo {
         platform: platform.to_string(),
         os_version: std::env::consts::OS.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Guard for the registry rule in `mod.rs`: only slicers whose Linux layout
+    /// has actually been verified may carry Linux executable candidates.
+    #[test]
+    fn only_verified_slicers_have_linux_candidates() {
+        for s in SLICERS {
+            let expected = matches!(s.id, "orca" | "bambu");
+            assert_eq!(
+                !s.linux_exe_candidates.is_empty(),
+                expected,
+                "unexpected linux_exe_candidates state for {}",
+                s.id
+            );
+        }
+    }
+}
+
+/// Linux executable discovery. Gated as a whole so the temp-dir helper does not
+/// sit unused (and warn) on Windows/macOS builds.
+#[cfg(test)]
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+mod linux_tests {
+    use super::*;
+
+    const ORCA_LINUX: &[&str] = &["orca-slicer", "orca-slicer/AppRun"];
+
+    struct TempRoot(PathBuf);
+    impl TempRoot {
+        fn new(tag: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!(
+                "perfectfit-test-{tag}-{}-{}",
+                std::process::id(),
+                crate::slicer_integration::now_unix()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            TempRoot(dir)
+        }
+        fn dir(&self, rel: &str) -> PathBuf {
+            let p = self.0.join(rel);
+            std::fs::create_dir_all(&p).unwrap();
+            p
+        }
+        fn file(&self, rel: &str) -> PathBuf {
+            let p = self.0.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, b"#!/bin/sh\n").unwrap();
+            p
+        }
+    }
+    impl Drop for TempRoot {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn linux_finds_native_binary_in_root() {
+        let t = TempRoot::new("linux-native");
+        let bin = t.dir("usr-bin");
+        let exe = t.file("usr-bin/orca-slicer");
+        assert_eq!(find_executable_in(&[bin], &[], &[], ORCA_LINUX), Some(exe));
+    }
+
+    #[test]
+    fn linux_finds_appimage_apprun_below_root() {
+        // Also pins the is_file() choice: `opt/orca-slicer` exists as a
+        // directory here, so an `exists()` check would return the directory.
+        let t = TempRoot::new("linux-apprun");
+        let opt = t.dir("opt");
+        let apprun = t.file("opt/orca-slicer/AppRun");
+        assert_eq!(find_executable_in(&[opt], &[], &[], ORCA_LINUX), Some(apprun));
+    }
+
+    #[test]
+    fn linux_prefers_the_earlier_root() {
+        // program_roots() lists $PATH before the fixed fallbacks, so a native
+        // install must win over an /opt AppImage integration.
+        let t = TempRoot::new("linux-order");
+        let path_dir = t.dir("path-dir");
+        let opt = t.dir("opt");
+        let native = t.file("path-dir/orca-slicer");
+        t.file("opt/orca-slicer/AppRun");
+        assert_eq!(
+            find_executable_in(&[path_dir, opt], &[], &[], ORCA_LINUX),
+            Some(native)
+        );
+    }
+
+    #[test]
+    fn linux_ignores_directories_and_empty_candidate_lists() {
+        let t = TempRoot::new("linux-none");
+        let opt = t.dir("opt");
+        t.dir("opt/bambu-studio"); // a directory, not an executable
+        assert_eq!(
+            find_executable_in(&[opt.clone()], &[], &[], &["bambu-studio"]),
+            None
+        );
+        // Slicers with no verified Linux layout carry an empty candidate list.
+        assert_eq!(find_executable_in(&[opt], &[], &[], &[]), None);
     }
 }
 

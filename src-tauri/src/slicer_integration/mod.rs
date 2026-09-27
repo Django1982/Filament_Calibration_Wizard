@@ -7,6 +7,9 @@
 //!
 //! Verified slicer data (folder names, executables, process names) comes from
 //! docs/SLICER_PROFILE_RESEARCH.md. Do not add entries without verification.
+//! Anything not yet verified on a real install is marked provisional inline and
+//! in that doc — currently: the Linux layout for Snapmaker Orca, ElegooSlicer,
+//! and Flash Studio (intentionally empty `linux_exe_candidates`).
 
 pub mod backup;
 pub mod discovery;
@@ -30,6 +33,8 @@ pub struct SlicerDescriptor {
     pub windows_exe_candidates: &'static [&'static str],
     /// App bundle candidates under /Applications (macOS).
     pub macos_app_candidates: &'static [&'static str],
+    /// Executable candidates relative to a program root (Linux).
+    pub linux_exe_candidates: &'static [&'static str],
     /// Process image names for running-detection (case-insensitive).
     pub process_names: &'static [&'static str],
 }
@@ -41,7 +46,13 @@ pub const SLICERS: &[SlicerDescriptor] = &[
         data_dir_name: "OrcaSlicer",
         windows_exe_candidates: &["OrcaSlicer\\orca-slicer.exe"],
         macos_app_candidates: &["OrcaSlicer.app"],
-        process_names: &["orca-slicer.exe", "OrcaSlicer"],
+        // Native package (/usr/bin/orca-slicer) and AppImage-style integration
+        // (/opt/orca-slicer/AppRun), both verified 2026-07-28 on Linux.
+        linux_exe_candidates: &["orca-slicer", "orca-slicer/AppRun"],
+        // Linux comm= name confirmed 2026-07-28 via `ps -axo comm=` against a
+        // running instance (likely truncated at the 15-byte Linux comm limit —
+        // matching is fine either way since detection uses the same `ps` call).
+        process_names: &["orca-slicer.exe", "OrcaSlicer", "orcaslicer_main"],
     },
     SlicerDescriptor {
         id: "bambu",
@@ -49,7 +60,11 @@ pub const SLICERS: &[SlicerDescriptor] = &[
         data_dir_name: "BambuStudio",
         windows_exe_candidates: &["Bambu Studio\\bambu-studio.exe"],
         macos_app_candidates: &["BambuStudio.app"],
-        process_names: &["bambu-studio.exe", "BambuStudio"],
+        // Native package (/usr/bin/bambu-studio), verified 2026-07-28 on Linux.
+        linux_exe_candidates: &["bambu-studio"],
+        // Linux comm= name confirmed 2026-07-28 via `ps -axo comm=` against a
+        // running instance.
+        process_names: &["bambu-studio.exe", "BambuStudio", "bambustu_main"],
     },
     SlicerDescriptor {
         id: "snapmaker-orca",
@@ -57,6 +72,8 @@ pub const SLICERS: &[SlicerDescriptor] = &[
         data_dir_name: "Snapmaker_Orca",
         windows_exe_candidates: &["Snapmaker_Orca\\snapmaker-orca.exe"],
         macos_app_candidates: &["Snapmaker Orca.app", "Snapmaker_Orca.app"],
+        // Linux install layout unverified — intentionally empty.
+        linux_exe_candidates: &[],
         process_names: &["snapmaker-orca.exe", "Snapmaker Orca"],
     },
     SlicerDescriptor {
@@ -65,6 +82,8 @@ pub const SLICERS: &[SlicerDescriptor] = &[
         data_dir_name: "ElegooSlicer",
         windows_exe_candidates: &["ElegooSlicer\\elegoo-slicer.exe"],
         macos_app_candidates: &["ElegooSlicer.app"],
+        // Linux install layout unverified — intentionally empty.
+        linux_exe_candidates: &[],
         process_names: &["elegoo-slicer.exe", "ElegooSlicer"],
     },
     SlicerDescriptor {
@@ -76,6 +95,8 @@ pub const SLICERS: &[SlicerDescriptor] = &[
             "Flashforge\\Orca-Flashforge\\Orca-Flashforge.exe",
         ],
         macos_app_candidates: &["Orca-Flashforge.app", "Flash Studio.app"],
+        // Linux install layout unverified — intentionally empty.
+        linux_exe_candidates: &[],
         process_names: &["flash studio.exe", "Orca-Flashforge.exe", "Orca-Flashforge"],
     },
 ];
