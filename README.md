@@ -1,5 +1,12 @@
 # PerfectFit — Filament Calibration Wizard
 
+> [!NOTE]
+> **Status: maintenance mode.** I'm no longer adding features here. My calibration work has
+> moved into **[Forca Slicer](https://github.com/tayloraaron078-tech/ForcaSlicer)**, a free
+> OrcaSlicer fork with a guided, more automated Calibration Wizard built into the slicer
+> (Windows alpha for now). PerfectFit keeps working for stock OrcaSlicer and Bambu Studio;
+> bug reports are still welcome, but expect slower fixes.
+
 Create a perfectly calibrated filament profile for Orca Slicer or Bambu Studio in one guided workflow. No tutorials, no guesswork, no spreadsheets.
 
 <img width="1148" height="1007" alt="Hero" src="https://github.com/user-attachments/assets/f56b6877-6558-460a-9df0-097523c63046" />
@@ -161,6 +168,9 @@ docker run -d -p 8080:80 --name perfectfit perfectfit:latest   # http://localhos
 `example-docker-compose.yaml` is a sample stack for reverse-proxying the
 container behind [Traefik](https://traefik.io/) with automatic Let's Encrypt
 TLS. Adjust the `Host(...)` rule, network, and image name to match your setup.
+No prebuilt image is published to a registry, so run Compose from a clone of this
+repository (`docker compose -f example-docker-compose.yaml up -d --build`) — or build the
+image first as shown above. Otherwise Docker fails with "pull access denied for perfectfit".
 Because the app uses hash-based routing and relative paths, the static server
 needs no SPA-fallback configuration.
 

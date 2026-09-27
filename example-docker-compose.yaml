@@ -1,5 +1,7 @@
 services:
   perfectfit:
+    # No prebuilt image is published — `build` makes Compose build it from this repo.
+    build: .
     image: perfectfit:latest
     container_name: perfectfit
     restart: unless-stopped
