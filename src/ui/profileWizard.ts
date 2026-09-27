@@ -7,6 +7,7 @@
 // ---------------------------------------------------------------------------
 
 import { h, clear, field, toast, confirmDialog, download } from './dom';
+import { setLeaveGuard } from '../app';
 import { getProject, getPrinter, saveProject, addTimeline, uid } from '../storage/store';
 import type { CalibrationProject, PrinterProfile } from '../types';
 import type {
@@ -31,7 +32,7 @@ import { completeSession, isAutomatedCalibrationEnabled } from '../automatedCali
 
 type Stage = 'slicer' | 'profiles' | 'configure' | 'preview' | 'result';
 
-interface WizState {
+export interface WizState {
   stage: Stage;
   installations: SlicerInstallation[] | null;
   installation: SlicerInstallation | null;
@@ -54,6 +55,9 @@ interface WizState {
   acknowledged: Set<string>;
   installResult: ProfileInstallResult | null;
   exportedTo: string | null;
+  /** True once the generated profile was installed, exported, or saved in the
+   *  project — from then on there is nothing left to lose by navigating away. */
+  completed: boolean;
 }
 
 const states = new Map<string, WizState>();
@@ -67,16 +71,28 @@ function stateFor(projectId: string): WizState {
       filterCompatibleOnly: true, selectedBase: null, manualSlicerId: 'orca',
       newName: '', targetExtruder: 0, applyAll: false, bakePaGcode: false, enabledPatchKeys: null,
       generated: null, validation: null, acknowledged: new Set(),
-      installResult: null, exportedTo: null
+      installResult: null, exportedTo: null, completed: false
     };
     states.set(projectId, s);
   }
   return s;
 }
 
+// This wizard keeps its state only in `states` (memory) — unlike the calibration
+// wizard there is no draft persistence, so leaving the view really does discard
+// the scan, the base-profile choice and the generated preview.
+export function hasProgressToLose(st: WizState): boolean {
+  if (st.completed) return false;
+  if (st.stage !== 'slicer') return true;
+  // On the first stage only a completed scan or an already-picked base profile
+  // is worth a prompt; re-selecting an installation is a single click.
+  return !!(st.scan || st.selectedBase || st.generated);
+}
+
 export async function renderProfileWizard(root: HTMLElement, projectId: string): Promise<void> {
   const project = await getProject(projectId);
   if (!project) {
+    setLeaveGuard(null);
     root.append(h('div', { class: 'card' }, h('h1', {}, 'Project not found'),
       h('a', { class: 'btn btn-primary', href: '#/' }, 'Back to dashboard')));
     return;
@@ -86,12 +102,25 @@ export async function renderProfileWizard(root: HTMLElement, projectId: string):
   const flags = loadExperimentalFeatures();
 
   if (!flags.slicerProfileGeneration) {
+    setLeaveGuard(null);
     root.append(h('div', { class: 'card' },
       h('h1', {}, 'Slicer profile generation is disabled'),
       h('p', {}, 'Enable “Experimental: slicer profile generation” in Settings to use this feature.'),
       h('a', { class: 'btn btn-primary', href: `#/project/${projectId}` }, 'Back to project')));
     return;
   }
+
+  // Warn before leaving once there is progress that navigation would discard.
+  // The closure reads `st` (the live entry from `states`), so re-arming it on
+  // every rerender is harmless — it always sees the current stage.
+  setLeaveGuard(async () => {
+    if (!hasProgressToLose(st)) return true;
+    return confirmDialog({
+      title: 'Leave the profile wizard?',
+      body: 'This wizard keeps its progress only while the page is open — the scanned presets, your base profile choice and the generated profile are discarded when you leave. Leave now?',
+      confirmLabel: 'Leave'
+    });
+  });
 
   const rerender = () => { clear(root); void renderProfileWizard(root, projectId); };
 
@@ -818,6 +847,7 @@ function renderResultStage(
             if (dest === null) return; // cancelled
             st.exportedTo = dest;
             await persistRecord(project, st, 'export', dest, null, null, true);
+            st.completed = true;
             toast(dest === 'download' ? 'Profile downloaded.' : `Saved to ${dest}`, 'success');
             rerender();
           } catch (e) { toast(String(e), 'error'); }
@@ -851,12 +881,15 @@ function renderResultStage(
       h('button', {
         class: 'btn', onClick: async () => {
           await persistRecord(project, st, 'saved', null, null, null, true);
+          st.completed = true;
           toast('Profile saved in the project.', 'success');
         }
       }, '💾 Save in project')));
 
   card.append(h('div', { class: 'btn-row', style: 'margin-top:.6rem' },
-    h('button', { class: 'btn btn-ghost', onClick: () => { st.stage = 'preview'; rerender(); } }, '← Back to preview')));
+    h('button', {
+      class: 'btn btn-ghost', onClick: () => { st.completed = false; st.stage = 'preview'; rerender(); }
+    }, '← Back to preview')));
 
   // After a successful export, offer to close out an open automated session too.
   if (st.exportedTo) {
@@ -891,12 +924,15 @@ function renderResultStage(
         confirmLabel: 'Replace (with backup)', danger: true
       });
       if (replace) return void doInstall(true);
+      // Back to editing: anything done from here on is unsaved again.
+      st.completed = false;
       st.stage = 'configure'; rerender(); return;
     }
 
     st.installResult = result;
     await persistRecord(project, st, 'install',
       result.installedFiles[0] ?? null, result.backupId, result.verificationPassed, result.success);
+    if (result.success) st.completed = true;
     rerender();
   }
 }
