@@ -3,6 +3,9 @@ dist/
 *.local
 .DS_Store
 
+# Local self-hosted server DB (see server/index.ts / PERFECTFIT_DB_PATH)
+*.sqlite3
+
 .claude/
 
 # Stray slicer/CLI logs

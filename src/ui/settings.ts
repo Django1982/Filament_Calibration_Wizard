@@ -1,12 +1,23 @@
 import { h, clear, field, numberInput, toast, confirmDialog, download } from './dom';
-import { loadSettings, saveSettings } from '../storage/store';
+import { loadSettings, saveSettings, hydrateSettingsFromServer } from '../storage/store';
 import { exportAll, importBackup } from '../export/backup';
 import { importFilePicker } from './importExport';
 import { applyTheme } from '../app';
 import { idb } from '../storage/db';
+import {
+  http, isBackendReadySync, getStoredToken, setStoredToken, clearStoredToken,
+  getStoredServerUrl, setStoredServerUrl, clearStoredServerUrl
+} from '../storage/serverBridge';
+import { eraseEverything } from '../storage/eraseEverything';
+import { getConnectionState } from '../storage/connectionState';
 import { loadExperimentalFeatures, saveExperimentalFeatures } from '../slicerIntegration/featureFlags';
 import * as bridge from '../slicerIntegration/bridge';
 import { backupDetectedPresetLibraries, totalFileCount } from '../slicerIntegration/libraryBackup';
+
+async function clearLocalData(): Promise<void> {
+  await idb.clear('projects'); await idb.clear('printers'); await idb.clear('photos');
+  localStorage.clear();
+}
 
 /**
  * Render a backup timestamp in the local time of the machine running the app.
@@ -79,11 +90,12 @@ export function renderSettings(root: HTMLElement): void {
     ),
     experimentalCard(),
     slicerBackupsCard(),
+    serverConnectionCard(root),
     h('div', { class: 'card' },
       h('h2', { style: 'margin-top:0' }, 'Privacy'),
       h('ul', {},
         h('li', {}, 'No account. No cloud. No analytics, ads, trackers, or telemetry.'),
-        h('li', {}, 'Nothing you enter — including photos — ever leaves this device.'),
+        h('li', {}, privacyDataLine()),
         h('li', {}, 'External model links open third-party websites; nothing is sent to them from your data.'),
         h('li', {}, 'The optional offline (PWA) cache stores only the app\'s own files.'))
     ),
@@ -109,7 +121,171 @@ export function renderSettings(root: HTMLElement): void {
             toast('All local data erased.', 'info');
             location.hash = '#/'; location.reload();
           }
-        }, '🗑 Erase all local data'))
+        }, '🗑 Erase all local data'),
+        isBackendReadySync() ? h('button', {
+          class: 'btn btn-danger', onClick: async () => {
+            const ok = await confirmDialog({
+              title: 'Erase everything, including server data?',
+              body: 'Deletes every project, printer profile, photo, and setting — on this device AND on the connected server, for every device that shares it. This cannot be undone. Export a backup first.',
+              confirmLabel: 'Erase everything', danger: true
+            });
+            if (!ok) return;
+            const really = await confirmDialog({
+              title: 'Really erase everything, including the server?',
+              body: 'Last chance — this also wipes the shared server copy that other devices are using. There is no cloud backup to recover from.',
+              confirmLabel: 'Yes, erase everything', danger: true
+            });
+            if (!really) return;
+            const result = await eraseEverything({ bulkErase: () => http.bulkErase(), clearLocal: clearLocalData });
+            if (!result.ok) { toast(result.message, 'error'); return; }
+            toast(result.message, 'info');
+            location.hash = '#/'; location.reload();
+          }
+        }, '⚠ Erase everything, including server data') : null)
+    )
+  );
+}
+
+/** Privacy card's data-location bullet — the flat "never leaves this device" claim only holds when no server is actually reachable ('no-backend'/'no-url'). */
+function privacyDataLine(): string {
+  const state = getConnectionState();
+  return state === 'no-backend' || state === 'no-url'
+    ? 'Nothing you enter — including photos — ever leaves this device.'
+    : 'Nothing you enter — including photos — leaves this device except to your own connected server. Never a third party.';
+}
+
+/**
+ * 'no-backend' with no server URL configured (the common case) stays a
+ * single unobtrusive line plus a collapsed "have a server?" affordance,
+ * matching the "don't clutter the page for the default case" call in the
+ * phase spec. Every other state gets a full card: there's an actual field
+ * to fill in and (for 'no-url'/'needs-token') an action required.
+ */
+function serverConnectionCard(root: HTMLElement): HTMLElement {
+  const state = getConnectionState();
+  const rerender = () => { clear(root); renderSettings(root); };
+
+  const urlField = (): HTMLElement => {
+    const current = getStoredServerUrl();
+    const input = h('input', { type: 'text', value: current ?? '', placeholder: 'https://your-server:8090' }) as HTMLInputElement;
+    const saveBtn = h('button', {
+      class: 'btn btn-sm', onClick: async () => {
+        const v = input.value.trim();
+        if (!v) { toast('Enter a server URL first.', 'error'); return; }
+        try {
+          setStoredServerUrl(v);
+        } catch (err) {
+          toast(err instanceof Error ? err.message : 'Invalid server URL.', 'error');
+          return;
+        }
+        await hydrateSettingsFromServer();
+        toast(getConnectionState() === 'no-backend' ? 'URL saved, but the server did not respond.' : 'Connected.', getConnectionState() === 'no-backend' ? 'error' : 'success');
+        rerender();
+      }
+    }, 'Save & connect');
+    const clearBtn = current ? h('button', {
+      class: 'btn btn-sm btn-danger', onClick: async () => {
+        clearStoredServerUrl();
+        await hydrateSettingsFromServer();
+        toast('Server URL cleared.', 'info');
+        rerender();
+      }
+    }, 'Clear') : null;
+    return h('div', { class: 'field' },
+      h('label', {}, 'Server URL'),
+      h('div', { class: 'btn-row' }, input, saveBtn, clearBtn),
+      h('p', { class: 'field-help' }, current
+        ? `Requests go to ${current}. Only needed when this page isn't served BY that address itself (e.g. the desktop app).`
+        : 'Only needed when this page isn\'t served BY your self-hosted server itself — e.g. the desktop app, or a browser tab opened somewhere other than the server\'s own address. Leave blank if you always browse straight to the server.')
+    );
+  };
+
+  const tokenField = (): HTMLElement => {
+    const current = getStoredToken();
+    const input = h('input', { type: 'password', placeholder: current ? 'Token is set — enter a new one to replace it' : 'No token set' }) as HTMLInputElement;
+    const saveBtn = h('button', {
+      class: 'btn btn-sm', onClick: () => {
+        const v = input.value.trim();
+        if (!v) { toast('Enter a token first.', 'error'); return; }
+        setStoredToken(v);
+        toast('API token saved.', 'success');
+        input.value = '';
+      }
+    }, 'Save token');
+    const clearBtn = current ? h('button', {
+      class: 'btn btn-sm btn-danger', onClick: () => {
+        clearStoredToken();
+        toast('API token cleared.', 'info');
+        rerender();
+      }
+    }, 'Clear token') : null;
+    return h('div', { class: 'field' },
+      h('label', {}, 'API token'),
+      h('div', { class: 'btn-row' }, input, saveBtn, clearBtn),
+      h('p', { class: 'field-help' }, current
+        ? 'A token is currently stored for this server.'
+        : 'No token is stored. If the server has no PERFECTFIT_API_TOKEN configured this is fine — leave it blank.')
+    );
+  };
+
+  if (state === 'no-backend') {
+    if (!getStoredServerUrl()) {
+      return h('div', {},
+        h('p', { class: 'field-help' }, 'Not connected to a server — everything is stored in this browser only.'),
+        h('details', { class: 'advanced' },
+          h('summary', {}, 'Have a self-hosted PerfectFit server?'),
+          urlField()
+        )
+      );
+    }
+    return h('div', { class: 'card' },
+      h('h2', { style: 'margin-top:0' }, '🌐 Server connection'),
+      h('p', {}, 'A server URL is configured, but it did not respond to a health check. Check the address and that the server is running.'),
+      urlField()
+    );
+  }
+
+  if (state === 'no-url') {
+    return h('div', { class: 'card' },
+      h('h2', { style: 'margin-top:0' }, '🌐 Server connection'),
+      h('p', {}, 'This copy of the app isn\'t served by a server itself (it\'s the desktop app), so it can\'t guess where your self-hosted server is. Enter its URL to connect.'),
+      urlField()
+    );
+  }
+
+  if (state === 'connected') {
+    return h('div', { class: 'card' },
+      h('h2', { style: 'margin-top:0' }, '🌐 Server connection'),
+      h('p', {}, 'Connected to your self-hosted server. Projects, printer profiles, and photos now live there — not just in this browser.'),
+      h('p', { class: 'field-help' }, 'Use the "⭳ Export all data + photos" button above to keep a portable backup of the server\'s data.'),
+      urlField(),
+      tokenField()
+    );
+  }
+
+  // 'needs-token'
+  const input = h('input', { type: 'password', placeholder: 'Paste API token' }) as HTMLInputElement;
+  const connectBtn = h('button', {
+    class: 'btn btn-primary', onClick: async () => {
+      const v = input.value.trim();
+      if (!v) { toast('Enter a token first.', 'error'); return; }
+      setStoredToken(v);
+      await hydrateSettingsFromServer();
+      if (getConnectionState() === 'needs-token') {
+        toast('That token was not accepted.', 'error');
+        return;
+      }
+      toast('Connected.', 'success');
+      rerender();
+    }
+  }, 'Save & connect');
+  return h('div', { class: 'card' },
+    h('h2', { style: 'margin-top:0' }, '🌐 Server connection'),
+    h('p', {}, 'A server was found, but it requires an API token and none is set, or the stored one is invalid. Saving, printer, and photo actions will fail until this is fixed.'),
+    urlField(),
+    h('div', { class: 'field' },
+      h('label', {}, 'API token'),
+      h('div', { class: 'btn-row' }, input, connectBtn)
     )
   );
 }

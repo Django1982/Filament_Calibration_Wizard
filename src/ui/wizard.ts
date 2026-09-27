@@ -406,7 +406,7 @@ export async function renderWizard(
             h('div', {}, h('strong', {}, 'I\'d like to retest this later'),
               h('p', { class: 'coach-note' }, 'Marks the step as done but flags it for a future re-run.'))),
           field('Notes', notes),
-          field('Photos of the test print (stored on this device only)', photoInput, 'Optional. Photos never leave your device; they\'re kept for your own reference (and future offline analysis features).'),
+          field('Photos of the test print', photoInput, 'Optional. Photos stay private to you — kept in this browser, or on your own self-hosted server if you\'ve connected one; never sent to a third party.'),
           photoList,
           h('div', { class: 'btn-row' },
             h('button', { class: 'btn', onClick: () => { state.stage = stages[idx - 1]; persist(); renderStage(); } }, '← Back'),

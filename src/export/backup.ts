@@ -1,6 +1,5 @@
-import type { BackupFile, CalibrationProject, PrinterProfile, StoredPhoto } from '../types';
-import { SCHEMA_VERSION, ensureProjectSteps, listPrinters, listProjects, loadSettings, saveProject, savePrinter, uid } from '../storage/store';
-import { idb } from '../storage/db';
+import type { BackupFile, CalibrationProject, PrinterProfile } from '../types';
+import { SCHEMA_VERSION, ensureProjectSteps, listAllPhotos, listPrinters, listProjects, loadSettings, saveProject, savePhoto, savePrinter, uid } from '../storage/store';
 
 /** Serialize one project (with its printer profile embedded) for sharing. */
 export async function exportProject(p: CalibrationProject, printer?: PrinterProfile): Promise<string> {
@@ -24,7 +23,7 @@ export async function exportAll(includePhotos: boolean): Promise<string> {
     settings: loadSettings()
   };
   if (includePhotos) {
-    const photos = await idb.getAll<StoredPhoto>('photos');
+    const photos = await listAllPhotos();
     file.photos = await Promise.all(photos.map(async ph => ({
       meta: { id: ph.id, projectId: ph.projectId, stepId: ph.stepId, attemptId: ph.attemptId, createdAt: ph.createdAt, name: ph.name, type: ph.type },
       dataUrl: await blobToDataUrl(ph.blob)
@@ -98,7 +97,7 @@ export async function importBackup(json: string): Promise<ImportResult> {
     try {
       const blob = dataUrlToBlob(ph.dataUrl);
       const projectId = projectIdMap.get(ph.meta.projectId) ?? ph.meta.projectId;
-      await idb.put('photos', { ...ph.meta, id: uid(), projectId, blob });
+      await savePhoto({ ...ph.meta, id: uid(), projectId, blob });
       photosImported++;
     } catch { /* skip broken photo entries */ }
   }
