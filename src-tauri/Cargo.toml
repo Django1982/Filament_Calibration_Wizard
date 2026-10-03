@@ -24,7 +24,7 @@ log = "0.4"
 tauri = { version = "2.11.3", features = [] }
 tauri-plugin-log = "2"
 tauri-plugin-dialog = "2"
-sha2 = "0.10"
+sha2 = "0.11"
 # Assemble Orca project 3mf files (a 3mf is a zip). Lean feature set: only the
 # deflate codec Orca projects use — no bzip2/zstd/aes/lzma.
 zip = { version = "8", default-features = false, features = ["deflate"] }
