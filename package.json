@@ -31,8 +31,8 @@
     "@types/qrcode": "^1.5.6",
     "fake-indexeddb": "^6.0.0",
     "typescript": "^5.5.0",
-    "vite": "^7.3.6",
-    "vitest": "^4.1.11"
+    "vite": "^8.3.2",
+    "vitest": "^5.0.3"
   },
   "dependencies": {
     "qrcode": "^1.5.4"
