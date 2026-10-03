@@ -45,7 +45,7 @@ jobs:
       # checksum, so re-runs skip the 171 MB download.
       - name: Cache pinned OrcaSlicer
         id: orca-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: orca-engine
           key: orca-${{ env.ORCA_VERSION }}-${{ env.ORCA_SHA256 }}
