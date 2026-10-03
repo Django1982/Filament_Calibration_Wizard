@@ -51,7 +51,7 @@ add `docs/RELEASE_NOTES_<version>.md` — it becomes the draft release's body.
 GitHub default-setup CodeQL and Dependabot are enabled on the repo.
 
 Node: the server relies on Node's native TS type stripping and `node:sqlite` (Docker uses
-Node 24); Vite 7 needs Node ≥ 20.19 / 22.12.
+Node 24); Vite 8 needs Node ≥ 20.19 / 22.12.
 
 ## Architecture
 
