@@ -60,7 +60,7 @@ pub fn sha256_file(path: &Path) -> Result<String, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("Read failed {}: {e}", path.display()))?;
     let mut h = Sha256::new();
     h.update(&bytes);
-    Ok(format!("{:x}", h.finalize()))
+    Ok(h.finalize().iter().map(|b| format!("{b:02x}")).collect())
 }
 
 /// Create and verify a backup covering `paths` (files that are about to be
@@ -394,6 +394,17 @@ pub fn open_backup_directory(app: tauri::AppHandle, backup_id: String) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Restore compares against checksums stored in existing backup manifests,
+    // so the digest must stay lowercase hex across sha2 upgrades.
+    #[test]
+    fn sha256_file_is_lowercase_hex() {
+        let p = std::env::temp_dir().join(format!("perfectfit-sha-{}", std::process::id()));
+        std::fs::write(&p, b"abc").unwrap();
+        let sum = sha256_file(&p).unwrap();
+        std::fs::remove_file(&p).ok();
+        assert_eq!(sum, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    }
 
     struct TempUserRoot(PathBuf);
     impl TempUserRoot {
