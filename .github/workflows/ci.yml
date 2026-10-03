@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+      - run: npm run validate:printers
+      - run: npm test
+      - run: npm run build
+      - run: npm run build:server
+      # Shipped dependencies only: a fresh advisory in dev tooling should not
+      # turn every PR red — Dependabot raises those instead.
+      - name: Audit runtime dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+  rust:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build artifacts
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      # tauri::generate_context! embeds frontendDist at compile time; tests
+      # don't need the real bundle, only the directory to exist.
+      - run: mkdir -p dist
+
+      - name: Unit tests
+        working-directory: ./src-tauri
+        run: cargo test --lib
