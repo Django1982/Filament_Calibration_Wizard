@@ -1,4 +1,4 @@
-import { h, clear, confirmDialog, toast, download } from './dom';
+import { h, clear, confirmDialog, download } from './dom';
 import { getProject, getPrinter, saveProject, addTimeline, completionPercent, currentStage } from '../storage/store';
 import { CALIBRATIONS, getCalibration } from '../data/calibrations';
 import { confidenceScore, confidenceLabel } from '../logic/confidence';

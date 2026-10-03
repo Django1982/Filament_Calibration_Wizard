@@ -194,33 +194,6 @@ function parseSheet(xml, shared) {
 
 // --- normalization ---------------------------------------------------------
 
-// Source column → normalized field. Order matches the workbook layout.
-const COLUMNS = {
-  A: 'manufacturer',
-  B: 'model',
-  C: 'technology',
-  D: 'extruderType',
-  E: 'maxNozzleTempC',
-  F: 'maxBedTempC',
-  G: 'maxChamberTempC',
-  H: 'heatedChamber',
-  I: 'maxVolumetricFlowMm3s',
-  J: 'defaultNozzleDiameterMm',
-  K: 'supportedNozzleDiametersMm',
-  L: 'buildVolumeX',
-  M: 'buildVolumeY',
-  N: 'buildVolumeZ',
-  O: 'maxPrintSpeedMmS',
-  P: 'maxAccelerationMmS2',
-  Q: 'firmware',
-  R: 'extruderCount',
-  S: 'multiMaterialCompatibility',
-  T: 'releaseYear',
-  U: 'profileSource',
-  V: 'sourceFile',
-  W: 'notes'
-};
-
 const warnings = [];
 function warn(rowIndex, message) { warnings.push({ row: rowIndex, message }); }
 
