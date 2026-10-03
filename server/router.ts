@@ -1,6 +1,6 @@
 // Minimal path-template router — no dependency, ~16 routes doesn't need a real framework.
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { sendError } from './http.ts';
+import { HttpError, sendError } from './http.ts';
 import { getHealth } from './routes/health.ts';
 import { deletePrinter, getPrinter, listPrinters, putPrinter } from './routes/printers.ts';
 import {
@@ -53,6 +53,16 @@ const ROUTES: RouteDef[] = [
   route('DELETE', '/api/v1/data', eraseAllData)
 ];
 
+// A malformed escape (e.g. a lone `%`) is client error, not a server fault —
+// left uncaught it surfaced as a logged 500.
+function decodePathParam(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    throw new HttpError(400, 'Malformed URL encoding');
+  }
+}
+
 interface MatchResult {
   handler: RouteHandler;
   params: Record<string, string>;
@@ -69,7 +79,7 @@ function matchRoute(method: string, pathname: string): MatchResult | undefined {
     for (let i = 0; i < candidate.segments.length; i++) {
       const seg = candidate.segments[i];
       if (seg.startsWith(':')) {
-        params[seg.slice(1)] = decodeURIComponent(pathSegments[i]);
+        params[seg.slice(1)] = decodePathParam(pathSegments[i]);
       } else if (seg !== pathSegments[i]) {
         matched = false;
         break;
