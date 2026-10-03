@@ -117,3 +117,10 @@ describe('request body size limits', () => {
     expect(res.status).toBe(204);
   });
 });
+
+describe('malformed path encoding', () => {
+  it('400s a route param with an invalid percent-escape instead of a 500', async () => {
+    const res = await fetch(`${server.baseUrl}/api/v1/printers/%E0%A4%A`);
+    expect(res.status).toBe(400);
+  });
+});

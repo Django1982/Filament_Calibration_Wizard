@@ -1,6 +1,6 @@
 import { h, clear, field, numberInput, toast, confirmDialog, download } from './dom';
 import { loadSettings, saveSettings, hydrateSettingsFromServer } from '../storage/store';
-import { exportAll, importBackup } from '../export/backup';
+import { exportAll } from '../export/backup';
 import { importFilePicker } from './importExport';
 import { applyTheme } from '../app';
 import { idb } from '../storage/db';

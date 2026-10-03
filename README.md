@@ -30,7 +30,7 @@ without tutorials, wikis, or guesswork.
 
 ## Requirements
 
-- Node.js 18+ (for development/build only — the built app is static files)
+- Node.js 20.19+ or 22.12+ (for development/build only — the built app is static files; the optional self-hosted server targets Node 24)
 
 ## Install & run (development)
 

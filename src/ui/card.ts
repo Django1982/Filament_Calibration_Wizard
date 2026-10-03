@@ -2,7 +2,6 @@ import { h } from './dom';
 import { getProject, getPrinter } from '../storage/store';
 import { getMaterial } from '../data/materials';
 import { confidenceScore } from '../logic/confidence';
-import { exportProject } from '../export/backup';
 import QRCode from 'qrcode';
 
 /**

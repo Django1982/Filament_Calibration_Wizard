@@ -1,4 +1,4 @@
-import { h, field, numberInput, issueList, clear, toast } from './dom';
+import { h, field, issueList, clear, toast } from './dom';
 import { listPrinters, createProject, saveProject, loadSettings } from '../storage/store';
 import { MATERIALS, getMaterial } from '../data/materials';
 import { slicerVersionOptions } from '../data/slicers';
