@@ -5,17 +5,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 PerfectFit is a local-first, guided wizard for calibrating filament profiles for Orca
-Slicer and Bambu Studio. It's a TypeScript/Vite static web app with no backend/accounts/
-analytics — all data lives in the browser (IndexedDB + localStorage) — optionally packaged
-as a native desktop app via Tauri v2 (Rust). The Tauri layer only adds an *optional* native
-integration (direct read/write of slicer profile files on disk); the web app is fully
-functional without it.
+Slicer and Bambu Studio. It's a TypeScript/Vite static web app with no accounts/analytics —
+by default all data lives in the browser (IndexedDB + localStorage). Two optional layers sit
+on top, and the web app must stay fully functional without either:
+
+- a native desktop app via Tauri v2 (Rust), adding direct read/write of slicer profile files
+  on disk and the (flag-gated) automated calibration pipeline;
+- an opt-in self-hosted persistence server (`server/`, shipped in the Docker image) that
+  replaces IndexedDB with SQLite when the app detects it.
 
 ## Commands
 
 ```bash
 npm run dev                  # vite dev server, http://localhost:5173
 npm run build                # tsc --noEmit, then vite build to dist/
+npm run build:server         # typecheck server/ + tests/server (separate tsconfig.server.json)
+node server/index.ts         # run the persistence server locally (port 8787, ./perfectfit.sqlite3)
 npm test                     # vitest run (all suites)
 npm run test:watch           # vitest watch mode
 npx vitest run tests/formulas.test.ts   # single suite
@@ -31,8 +36,22 @@ npm run tauri build          # native desktop build
 Rust side (`src-tauri/`): tests are inline `#[cfg(test)]` modules in `backup.rs`,
 `install.rs`, `discovery.rs` — run with `cargo test` from `src-tauri/`.
 
-There is no lint script; TypeScript's `strict` mode (via `tsc --noEmit` in `npm run build`)
-is the only enforced static check.
+Real-Orca probes are `#[ignore]`d and env-driven (`PERFECTFIT_ORCA_ROOT`, `PERFECTFIT_ORCA_ZIP`):
+`cargo test --lib -- --ignored --nocapture <filter>`. They need an OrcaSlicer install; the
+manual-only `integration.yml` workflow fetches the pinned build. Its pinned version/URL/sha256
+must match `PINNED_MANAGED_ORCA` in `src-tauri/src/slicer_integration/engine.rs`.
+
+There is no lint script; TypeScript `strict` mode is the only static check. `ci.yml` (push to
+`main`, PRs) runs `validate:printers`, `npm test`, both builds, `npm audit --omit=dev` and
+`cargo test --lib`; `integration.yml` is manual-only.
+
+Releasing: bump the version in `package.json`, `src-tauri/tauri.conf.json` and
+`src-tauri/Cargo.toml` (the tag-triggered `release.yml` fails if they disagree with the tag), and
+add `docs/RELEASE_NOTES_<version>.md` — it becomes the draft release's body.
+GitHub default-setup CodeQL and Dependabot are enabled on the repo.
+
+Node: the server relies on Node's native TS type stripping and `node:sqlite` (Docker uses
+Node 24); Vite 7 needs Node ≥ 20.19 / 22.12.
 
 ## Architecture
 
@@ -84,6 +103,36 @@ overwriting them). It is optional and gated behind `isDesktop()`.
 - Fixtures for this subsystem's tests live in `tests/slicerIntegration/fixtures/` — real
   sampled profile JSON/info files from each supported slicer, used to test adapters/scanner/
   generator against actual on-disk formats rather than synthetic data.
+
+### Automated calibration (`src/automatedCalibration/`) — desktop-only, behind a flag
+
+PerfectFit drives a managed (pinned, downloaded-on-demand) OrcaSlicer headlessly to prepare and
+slice each calibration test itself; it never starts a print. Off by default via the
+`automatedCalibration` experimental flag; Windows-only acquisition so far. `engineBridge.ts` is
+this subsystem's native boundary (Rust side: `engine.rs`, `flow_test.rs`, `model_project.rs`,
+`preset_resolver.rs`, `project_assembly.rs`). Architecture and stage status:
+`docs/AUTOMATED_CALIBRATION.md`.
+
+### Self-hosted server (`server/`) — optional, Docker
+
+Plain `node:http` + `node:sqlite`, no npm runtime deps, no build step (Node runs the `.ts`
+directly — keep imports with explicit `.ts` extensions and type-strippable syntax, i.e. no
+enums/namespaces/parameter properties). Hand-rolled router (`router.ts`) over `/api/v1/*`;
+non-API GETs serve the SPA from `PERFECTFIT_STATIC_DIR`. Projects/printers/settings are stored
+as opaque JSON blobs; photos as raw bytes with allowlisted image MIME types.
+
+Client side, `src/storage/serverBridge.ts` is the single boundary (mirrors `bridge.ts`): it
+probes `./api/v1/health` at startup and `store.ts` falls back to IndexedDB when nothing answers.
+A persisted absolute server URL lets non-same-origin clients (Tauri) connect.
+
+Security model, deliberately coupled — keep it intact when touching the server:
+- `PERFECTFIT_API_TOKEN` unset ⇒ no auth **and no CORS headers**; same-origin enforcement is
+  then the only protection, so never enable CORS without a token.
+- Token set ⇒ bearer auth on everything except `GET /api/v1/health`, plus `Access-Control-Allow-Origin: *`
+  (safe because the only credential is an explicit header, never a cookie).
+- Every body read needs an explicit size cap (`readRawBody` has none of its own); client-supplied
+  values that are echoed back as headers must be allowlisted.
+Regression tests for these live in `tests/server/` (`security.test.ts`, `cors.test.ts`, `auth.test.ts`).
 
 ### Desktop shell (`src-tauri/`)
 
