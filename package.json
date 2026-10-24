@@ -26,13 +26,13 @@
     "validate:printers": "node scripts/generate-printer-database.mjs --check"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.12.1",
-    "@types/node": "^24.19.0",
+    "@tauri-apps/cli": "^2.12.4",
+    "@types/node": "^24.19.2",
     "@types/qrcode": "^1.5.6",
-    "fake-indexeddb": "^6.0.0",
+    "fake-indexeddb": "^6.2.6",
     "typescript": "^7.0.2",
-    "vite": "^8.3.2",
-    "vitest": "^5.0.3"
+    "vite": "^8.3.5",
+    "vitest": "^5.0.5"
   },
   "dependencies": {
     "qrcode": "^1.5.4"
