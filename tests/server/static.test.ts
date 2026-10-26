@@ -70,4 +70,17 @@ describe('static file serving', () => {
     const res = await fetch(`${server.baseUrl}/assets/app.js`, { method: 'POST' });
     expect(res.status).toBe(404);
   });
+
+  it('sends hardening headers on served files, with a CSP that blocks inline scripts and framing', async () => {
+    for (const path of ['/', '/assets/app.js']) {
+      const res = await fetch(`${server.baseUrl}${path}`);
+      const csp = res.headers.get('content-security-policy') ?? '';
+      expect(csp).toContain("script-src 'self'");
+      expect(csp).not.toMatch(/script-src[^;]*'unsafe-(inline|eval)'/);
+      expect(csp).toContain("object-src 'none'");
+      expect(csp).toContain("frame-ancestors 'none'");
+      expect(res.headers.get('x-content-type-options')).toBe('nosniff');
+      expect(res.headers.get('referrer-policy')).toBe('no-referrer');
+    }
+  });
 });

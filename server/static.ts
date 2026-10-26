@@ -25,6 +25,30 @@ const MIME_TYPES: Record<string, string> = {
 };
 const DEFAULT_MIME = 'application/octet-stream';
 
+// The SPA only loads its own files and fetches the (possibly cross-origin)
+// API server the user configures, hence connect-src stays open to http(s).
+// style-src keeps 'unsafe-inline' for the inline style attributes the UI
+// sets; scripts get no inline/eval escape hatch. Keep in sync with the CSP in
+// src-tauri/tauri.conf.json.
+const CSP = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob:",
+  "font-src 'self'",
+  "connect-src 'self' http: https:",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'none'"
+].join('; ');
+
+const SECURITY_HEADERS = {
+  'Content-Security-Policy': CSP,
+  'X-Content-Type-Options': 'nosniff',
+  'Referrer-Policy': 'no-referrer'
+};
+
 function contentTypeFor(path: string): string {
   return MIME_TYPES[extname(path).toLowerCase()] ?? DEFAULT_MIME;
 }
@@ -86,6 +110,6 @@ export function serveStatic(req: IncomingMessage, res: ServerResponse, staticRoo
     return;
   }
 
-  res.writeHead(200, { 'Content-Type': contentTypeFor(filePath), 'Content-Length': body.length });
+  res.writeHead(200, { 'Content-Type': contentTypeFor(filePath), 'Content-Length': body.length, ...SECURITY_HEADERS });
   res.end(req.method === 'HEAD' ? undefined : body);
 }

@@ -2,7 +2,24 @@ import './styles.css';
 import { startApp } from './app';
 import { hydrateSettingsFromServer } from './storage/store';
 import { getStoredToken, setStoredToken, setStoredServerUrl } from './storage/serverBridge';
-import { captureTokenFromUrl, captureServerUrlFromUrl, shouldApplyServerUrlFromLink } from './storage/tokenCapture';
+import { captureTokenFromUrl, captureServerUrlFromUrl, decideServerUrlFromLink } from './storage/tokenCapture';
+
+/**
+ * Strict `=== true`, awaited: some webviews (Tauri's dialog plugin) replace
+ * window.confirm with an async version. A Promise must never count as "yes",
+ * and an unresolved/rejected prompt counts as "no".
+ */
+async function confirmForeignServer(serverUrl: string): Promise<boolean> {
+  const host = new URL(serverUrl).host;
+  try {
+    const answer: unknown = await Promise.resolve(
+      window.confirm(`This link wants PerfectFit to store and load your data on:\n\n${host}\n\nOnly continue if you trust this server and expected this link.`)
+    );
+    return answer === true;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * A self-hosted deployment can hand a user a one-time link carrying their
@@ -15,12 +32,13 @@ import { captureTokenFromUrl, captureServerUrlFromUrl, shouldApplyServerUrlFromL
  * params is enough for one-shot desktop onboarding.
  *
  * SECURITY: `?server=` is deliberately NOT applied unattended when a token
- * is already stored and this link doesn't also carry a fresh one — see
- * shouldApplyServerUrlFromLink()'s doc comment. Without this guard, a bare
- * `?server=https://attacker-host` link would silently repoint an existing
- * stored token's Authorization header at an attacker-chosen host.
+ * is already stored and this link doesn't also carry a fresh one, and a
+ * foreign host always needs the user's confirmation — see
+ * decideServerUrlFromLink()'s doc comment. Without these guards, a bare
+ * `?server=https://attacker-host` link would silently repoint the app's data
+ * (and any stored token's Authorization header) at an attacker-chosen host.
  */
-function captureTokenFromLocation(): void {
+async function captureTokenFromLocation(): Promise<void> {
   let href = location.href;
   let changed = false;
 
@@ -35,11 +53,13 @@ function captureTokenFromLocation(): void {
 
   const serverResult = captureServerUrlFromUrl(href);
   if (serverResult.serverUrl) {
-    const allowed = shouldApplyServerUrlFromLink({
+    const decision = decideServerUrlFromLink({
+      serverUrl: serverResult.serverUrl,
+      pageOrigin: location.origin,
       hasStoredToken: hadStoredToken,
       hasFreshTokenInLink: Boolean(tokenResult.token)
     });
-    if (allowed) {
+    if (decision === 'apply' || (decision === 'confirm' && (await confirmForeignServer(serverResult.serverUrl)))) {
       try {
         setStoredServerUrl(serverResult.serverUrl);
       } catch {
@@ -47,7 +67,7 @@ function captureTokenFromLocation(): void {
         // leave any existing/no stored server URL alone.
       }
     } else {
-      console.warn('Ignored ?server= from a link: a token is already stored and this link did not supply a fresh one.');
+      console.warn('Ignored ?server= from a link: rejected or not confirmed.');
     }
     href = serverResult.strippedUrl;
     changed = true;
@@ -57,7 +77,7 @@ function captureTokenFromLocation(): void {
 }
 
 async function bootstrap(): Promise<void> {
-  captureTokenFromLocation();
+  await captureTokenFromLocation();
 
   // Must resolve before startApp()'s first synchronous loadSettings() call so
   // server-side settings (if any backend is configured) win over stale local
