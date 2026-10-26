@@ -11,3 +11,6 @@ dist/
 # Stray slicer/CLI logs
 *.log
 /CLAUDE.local.md
+
+# Serena MCP local project state
+.serena/
