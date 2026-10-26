@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.4.0 - 2026-10-26
+
+First release under new maintainership. Full notes: `docs/RELEASE_NOTES_1.4.0.md`.
+
+### Added
+
+- **Optional self-hosted persistence server** (`server/`, Docker): SQLite storage for projects, printers, photos and settings, opt-in bearer-token auth via `PERFECTFIT_API_TOKEN`, a server connection card in Settings, link-based token/server onboarding, and remote-server support in the desktop app. The browser-only default is unchanged.
+- **Linux detection and launch** of Orca Slicer and Bambu Studio in the desktop app.
+- **Experimental automated calibration** (off by default, Windows only): a managed, pinned OrcaSlicer prepares and slices each calibration test headlessly, behind the `automatedCalibration` flag. It never starts a print.
+- Warning before leaving the slicer profile wizard mid-flow; slicer verification status now reflects the platform in use.
+
+### Security
+
+- `?server=` links need explicit confirmation for any host other than the page's own origin; non-http(s) values are rejected.
+- Strict CSP for the desktop webview; the server sends CSP, `nosniff` and `Referrer-Policy` headers on app files.
+- The OrcaSlicer executable's SHA-256 is re-verified against the vetted manifest before a slice or "open in slicer".
+- Server: stored content-type injection on photo upload closed, request body size capped, malformed percent-encoding returns 400.
+- CI on every push and pull request, Dependabot version updates and CodeQL enabled.
+
+### Changed
+
+- Upgraded TypeScript 7, Vite 8, Vitest 5, Tauri 2.12, sha2 0.11 and current minor/patch dependencies.
+
 ## 1.3.2 - 2026-07-24
 
 Follow-up to 1.3.1, which was tagged but superseded before publication — **1.3.2 contains everything in 1.3.1 plus the items below**, so upgrading from 1.3.0 gets the lot.

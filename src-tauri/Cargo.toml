@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "1.3.2"
+version = "1.4.0"
 description = "Filament Calibration Wizard"
 authors = ["Aaron Taylor"]
 license = "AGPL-3.0-only"

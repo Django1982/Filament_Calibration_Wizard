@@ -1,7 +1,7 @@
 {
   "name": "perfectfit-filament-calibration-wizard",
   "private": true,
-  "version": "1.3.2",
+  "version": "1.4.0",
   "description": "PerfectFit — a local-first guided wizard for calibrating filament profiles for Orca Slicer and Bambu Studio.",
   "license": "AGPL-3.0-only",
   "author": "Aaron Taylor",
