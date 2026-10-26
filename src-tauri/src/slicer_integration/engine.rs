@@ -598,6 +598,21 @@ fn read_manifest_from(dir: &Path, engine_id: &str) -> Result<Option<StoredEngine
     }
 }
 
+/// The executable a launch may run: it must still exist and still hash to the
+/// checksum recorded when the user vetted it. The manifest and the managed
+/// engines folder are user-writable, so without this a swapped binary would run
+/// at the next slice or open despite the "tamper-evident" record.
+fn verified_executable(manifest: &StoredEngineManifest) -> Result<PathBuf, String> {
+    let exe = PathBuf::from(&manifest.executable_path);
+    if !exe.is_file() {
+        return Err("Engine executable is missing — re-run detection".into());
+    }
+    if sha256_file(&exe)? != manifest.checksum_sha256 {
+        return Err("Engine executable changed since it was validated — re-run detection".into());
+    }
+    Ok(exe)
+}
+
 // --- detection / validation core --------------------------------------------
 
 /// Resolve and validate the installed-Orca engine, optionally from a
@@ -916,10 +931,7 @@ pub fn run_calibration_slice(
     let engines_dir = security::engines_root()?;
     let manifest = read_manifest_from(&engines_dir, &engine_id)?
         .ok_or_else(|| "Engine not detected — run detection before slicing".to_string())?;
-    let exe = PathBuf::from(&manifest.executable_path);
-    if !exe.is_file() {
-        return Err("Engine executable is missing — re-run detection".into());
-    }
+    let exe = verified_executable(&manifest)?;
 
     // Resolve managed, per-job paths.
     security::validate_component(&project_file_name)?;
@@ -1034,10 +1046,7 @@ pub fn open_calibration_project(
     let engines_dir = security::engines_root()?;
     let manifest = read_manifest_from(&engines_dir, &engine_id)?
         .ok_or_else(|| "Engine not detected — run detection first".to_string())?;
-    let exe = PathBuf::from(&manifest.executable_path);
-    if !exe.is_file() {
-        return Err("Engine executable is missing — re-run detection".into());
-    }
+    let exe = verified_executable(&manifest)?;
     security::validate_component(&project_file_name)?;
     if !project_file_name.to_ascii_lowercase().ends_with(".3mf") {
         return Err("Project file must be a .3mf".into());
@@ -1122,6 +1131,52 @@ mod tests {
             sha256_file(&f).unwrap(),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    fn manifest_for(exe: &Path, checksum: &str) -> StoredEngineManifest {
+        StoredEngineManifest {
+            schema_version: 1,
+            engine_id: INSTALLED_ORCA.into(),
+            display_name: "OrcaSlicer".into(),
+            executable_path: exe.display().to_string(),
+            version: None,
+            source: "manual".into(),
+            checksum_sha256: checksum.into(),
+            capabilities: EngineCapabilities::empty(),
+            detected_at: "0".into(),
+        }
+    }
+
+    const ABC_SHA256: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+
+    #[test]
+    fn verified_executable_accepts_an_unchanged_binary() {
+        let d = temp_dir("verify_ok");
+        let exe = d.join("orca-slicer");
+        std::fs::write(&exe, b"abc").unwrap();
+        let got = verified_executable(&manifest_for(&exe, ABC_SHA256)).unwrap();
+        assert_eq!(got, exe);
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn verified_executable_rejects_a_swapped_binary() {
+        let d = temp_dir("verify_swapped");
+        let exe = d.join("orca-slicer");
+        std::fs::write(&exe, b"abc").unwrap();
+        let manifest = manifest_for(&exe, ABC_SHA256);
+        std::fs::write(&exe, b"evil").unwrap();
+        let err = verified_executable(&manifest).unwrap_err();
+        assert!(err.contains("changed since it was validated"), "{err}");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn verified_executable_rejects_a_missing_binary() {
+        let d = temp_dir("verify_missing");
+        let err = verified_executable(&manifest_for(&d.join("gone"), ABC_SHA256)).unwrap_err();
+        assert!(err.contains("missing"), "{err}");
         std::fs::remove_dir_all(&d).ok();
     }
 

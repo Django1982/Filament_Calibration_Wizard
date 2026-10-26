@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { captureTokenFromUrl, captureServerUrlFromUrl, shouldApplyServerUrlFromLink } from '../../src/storage/tokenCapture';
+import { captureTokenFromUrl, captureServerUrlFromUrl, shouldApplyServerUrlFromLink, decideServerUrlFromLink } from '../../src/storage/tokenCapture';
 
 describe('captureTokenFromUrl', () => {
   it('returns null token and the unchanged URL when there is no token param', () => {
@@ -92,6 +92,36 @@ describe('shouldApplyServerUrlFromLink (security gate for ?server=)', () => {
 
   it('is true when no token was stored and this link also supplies one (ordinary first-time onboarding)', () => {
     expect(shouldApplyServerUrlFromLink({ hasStoredToken: false, hasFreshTokenInLink: true })).toBe(true);
+  });
+});
+
+describe('decideServerUrlFromLink (confirmation gate for ?server=)', () => {
+  const page = 'https://perfectfit.example';
+
+  it('rejects when the stored-token gate already says no', () => {
+    expect(decideServerUrlFromLink({ serverUrl: 'https://other.example', pageOrigin: page, hasStoredToken: true, hasFreshTokenInLink: false })).toBe('reject');
+  });
+
+  it('asks for confirmation for a foreign host even when nothing is stored — the no-token redirect case', () => {
+    expect(decideServerUrlFromLink({ serverUrl: 'https://evil.example', pageOrigin: page, hasStoredToken: false, hasFreshTokenInLink: false })).toBe('confirm');
+  });
+
+  it('asks for confirmation for a foreign host even when the link brings its own token', () => {
+    expect(decideServerUrlFromLink({ serverUrl: 'http://192.168.1.50:8090', pageOrigin: page, hasStoredToken: false, hasFreshTokenInLink: true })).toBe('confirm');
+  });
+
+  it('applies without a prompt when the server is the page\'s own origin', () => {
+    expect(decideServerUrlFromLink({ serverUrl: 'https://perfectfit.example/', pageOrigin: page, hasStoredToken: false, hasFreshTokenInLink: false })).toBe('apply');
+  });
+
+  it('treats a different port or scheme as a foreign origin', () => {
+    expect(decideServerUrlFromLink({ serverUrl: 'http://perfectfit.example', pageOrigin: page, hasStoredToken: false, hasFreshTokenInLink: false })).toBe('confirm');
+  });
+
+  it('rejects values that are not http(s) URLs', () => {
+    for (const bad of ['javascript:alert(1)', 'file:///etc/passwd', 'not a url', '']) {
+      expect(decideServerUrlFromLink({ serverUrl: bad, pageOrigin: page, hasStoredToken: false, hasFreshTokenInLink: false })).toBe('reject');
+    }
   });
 });
 

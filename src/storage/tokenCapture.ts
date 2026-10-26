@@ -62,3 +62,31 @@ export function captureServerUrlFromUrl(url: string): ServerUrlCaptureResult {
 export function shouldApplyServerUrlFromLink(opts: { hasStoredToken: boolean; hasFreshTokenInLink: boolean }): boolean {
   return !opts.hasStoredToken || opts.hasFreshTokenInLink;
 }
+
+export type ServerLinkDecision = 'apply' | 'confirm' | 'reject';
+
+/**
+ * SECURITY: shouldApplyServerUrlFromLink() only protects a stored token. With
+ * no token stored a bare `?server=https://attacker` link would still repoint
+ * every read and write (projects, printers, photos, settings) at the
+ * attacker's host, and the attacker could answer with poisoned data. So a
+ * link-supplied server is only applied unattended when it is the page's own
+ * origin (no new trust); any other host needs the user's explicit
+ * confirmation, naming the host. Non-http(s) values are always rejected.
+ */
+export function decideServerUrlFromLink(opts: {
+  serverUrl: string;
+  pageOrigin: string;
+  hasStoredToken: boolean;
+  hasFreshTokenInLink: boolean;
+}): ServerLinkDecision {
+  if (!shouldApplyServerUrlFromLink(opts)) return 'reject';
+  let parsed: URL;
+  try {
+    parsed = new URL(opts.serverUrl);
+  } catch {
+    return 'reject';
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return 'reject';
+  return parsed.origin === opts.pageOrigin ? 'apply' : 'confirm';
+}
