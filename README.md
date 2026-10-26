@@ -1,11 +1,11 @@
 # PerfectFit — Filament Calibration Wizard
 
 > [!NOTE]
-> **Status: maintenance mode.** I'm no longer adding features here. My calibration work has
-> moved into **[Forca Slicer](https://github.com/tayloraaron078-tech/ForcaSlicer)**, a free
-> OrcaSlicer fork with a guided, more automated Calibration Wizard built into the slicer
-> (Windows alpha for now). PerfectFit keeps working for stock OrcaSlicer and Bambu Studio;
-> bug reports are still welcome, but expect slower fixes.
+> **Status: actively maintained.** PerfectFit has new maintainership and is being developed
+> again — bug reports and feature requests are welcome. The original author's calibration
+> work continues in **[Forca Slicer](https://github.com/tayloraaron078-tech/ForcaSlicer)**,
+> a free OrcaSlicer fork with a built-in Calibration Wizard; PerfectFit stays focused on
+> stock OrcaSlicer and Bambu Studio.
 
 Create a perfectly calibrated filament profile for Orca Slicer or Bambu Studio in one guided workflow. No tutorials, no guesswork, no spreadsheets.
 
