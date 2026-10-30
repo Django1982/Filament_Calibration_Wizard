@@ -1,3 +1,4 @@
+import { statSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { startTestServer, type TestServerHandle } from './testServer.ts';
@@ -62,7 +63,8 @@ describe('static file serving', () => {
     const res = await fetch(`${server.baseUrl}/assets/app.js`, { method: 'HEAD' });
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toBe('text/javascript; charset=utf-8');
-    expect(res.headers.get('content-length')).toBe(String('console.log(\'fixture asset\');\n'.length));
+    // Size on disk, not a literal: a Windows checkout turns the fixture's LF into CRLF.
+    expect(res.headers.get('content-length')).toBe(String(statSync(join(FIXTURE_STATIC_DIR, 'assets', 'app.js')).size));
     expect(await res.text()).toBe('');
   });
 
