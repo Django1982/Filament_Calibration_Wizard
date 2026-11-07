@@ -29,10 +29,10 @@
     "@tauri-apps/cli": "^2.12.4",
     "@types/node": "^24.19.2",
     "@types/qrcode": "^1.5.6",
-    "fake-indexeddb": "^6.2.6",
+    "fake-indexeddb": "^6.2.7",
     "typescript": "^7.0.2",
     "vite": "^8.3.5",
-    "vitest": "^5.0.5"
+    "vitest": "^5.1.0"
   },
   "dependencies": {
     "qrcode": "^1.5.4"
